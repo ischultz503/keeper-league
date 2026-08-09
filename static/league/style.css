@@ -1,0 +1,167 @@
+/* Single hand-written stylesheet -- no build tooling, per the project's tech decisions. */
+
+:root {
+  --ink: #1b1f24;
+  --muted: #6b7480;
+  --line: #e3e6ea;
+  --bg: #f7f8fa;
+  --card: #ffffff;
+  --accent: #1f5f3f;
+  --accent-soft: #eaf3ee;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+main {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+}
+
+/* Header ------------------------------------------------------------------ */
+
+.site-header {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+  padding: 0.85rem 1.25rem;
+  background: var(--accent);
+  color: #fff;
+}
+
+.site-header a { color: #fff; text-decoration: none; }
+.site-header a:hover { text-decoration: underline; }
+.brand { font-weight: 700; letter-spacing: 0.02em; }
+
+.site-header nav {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-left: auto;
+}
+
+.site-header nav form { margin: 0; }
+.who { opacity: 0.75; font-size: 0.9rem; }
+
+.linkish {
+  background: none;
+  border: 0;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+/* Typography -------------------------------------------------------------- */
+
+h1 { margin: 0 0 0.25rem; font-size: 1.6rem; }
+.subtle { color: var(--muted); }
+.note { color: var(--muted); font-size: 0.9rem; max-width: 60ch; }
+.error { color: #a12a2a; }
+code { background: #eef0f3; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
+
+/* Tables ------------------------------------------------------------------ */
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+table.data th,
+table.data td {
+  text-align: left;
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--line);
+}
+
+table.data th {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: #fbfcfd;
+}
+
+table.data tr:last-child td { border-bottom: 0; }
+table.data td.num, table.data th.num { text-align: right; }
+table.data tr.mine { background: var(--accent-soft); }
+table.data tr.undrafted td { color: var(--muted); }
+table.data tr.undrafted td strong { color: var(--ink); }
+table.data a { color: var(--accent); font-weight: 600; }
+
+/* Position chips ---------------------------------------------------------- */
+
+.pos {
+  display: inline-block;
+  min-width: 2.6em;
+  text-align: center;
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: #eef0f3;
+  color: #46505c;
+}
+
+.pos-QB  { background: #e7e0f7; color: #4b3b7a; }
+.pos-RB  { background: #dcefe2; color: #23603c; }
+.pos-WR  { background: #dde8f7; color: #23486e; }
+.pos-TE  { background: #f9e6d5; color: #7a4a1e; }
+.pos-K   { background: #f3e2e6; color: #7a2f42; }
+.pos-DEF { background: #e2e5e8; color: #414a54; }
+
+/* Login ------------------------------------------------------------------- */
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 1.25rem;
+}
+
+.login-form { max-width: 22rem; margin-top: 1rem; }
+.login-form p { margin: 0 0 0.9rem; }
+.login-form label { display: block; font-weight: 600; font-size: 0.9rem; margin-bottom: 0.2rem; }
+
+.login-form input {
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #c8cdd4;
+  border-radius: 4px;
+  font: inherit;
+}
+
+button[type="submit"] {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 4px;
+  padding: 0.5rem 1.1rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.helptext, .login-form ul { color: var(--muted); font-size: 0.85rem; }
+
+footer {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 1rem 2rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}

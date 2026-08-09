@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}League Overview{% endblock %}
+
+{% block content %}
+<h1>League Overview</h1>
+<p class="subtle">{% if season %}{{ season.year }} season{% else %}No season data imported yet.{% endif %}</p>
+
+<table class="data">
+  <thead>
+    <tr><th>Team</th><th>Manager</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for team in teams %}
+      <tr{% if team.user_id == user.id %} class="mine"{% endif %}>
+        <td><a href="{% url 'team_detail' team.pk %}">{{ team.name }}</a></td>
+        <td>{{ team.owner_name }}</td>
+        <td class="subtle">{% if team.user_id == user.id %}your team{% endif %}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="3">No teams yet. Run <code>python manage.py import_rosters</code>.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

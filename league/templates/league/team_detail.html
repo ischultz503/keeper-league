@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}{{ team.name }}{% endblock %}
+
+{% block content %}
+<h1>{{ team.name }}</h1>
+<p class="subtle">{{ team.owner_name }}{% if season %} &middot; {{ season.year }} roster{% endif %}</p>
+
+<table class="data">
+  <thead>
+    <tr>
+      <th>Player</th>
+      <th>Pos</th>
+      <th class="num">Draft round</th>
+      <th class="num">Overall pick</th>
+      <th class="num">Base keeper cost</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for entry in entries %}
+      <tr{% if entry.is_undrafted %} class="undrafted"{% endif %}>
+        <td>{{ entry.player.name }}</td>
+        <td><span class="pos pos-{{ entry.player.position }}">{{ entry.player.position }}</span></td>
+        <td class="num">{% if entry.is_undrafted %}<span class="subtle">Undrafted</span>{% else %}{{ entry.draft_round }}{% endif %}</td>
+        <td class="num">{% if entry.overall_pick %}{{ entry.overall_pick }}{% else %}<span class="subtle">&mdash;</span>{% endif %}</td>
+        <td class="num"><strong>Round {{ entry.base_keeper_cost }}</strong></td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="5">No roster entries for this season.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p class="note">
+  Base keeper cost is the draft round for rounds 1&ndash;8; players drafted in
+  round 9 or later, or undrafted, cost a Round 8 pick. Escalation for repeat
+  keeps and pick-forfeiture rules come in the next phase.
+</p>
+
+<p><a href="{% url 'league_overview' %}">&larr; Back to league</a></p>
+{% endblock %}

@@ -1,0 +1,6 @@
+pandas
+numpy
+openpyxl
+ipykernel
+django
+jupyterlab
