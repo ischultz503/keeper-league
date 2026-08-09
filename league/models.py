@@ -79,14 +79,14 @@ class RosterEntry(models.Model):
     draft_round = models.PositiveIntegerField(null=True, blank=True)
     overall_pick = models.PositiveIntegerField(null=True, blank=True)
 
-    # Section 5. Three states, which is why this is a nullable boolean rather
-    # than a plain one: True = eligible, False = not eligible, NULL = the
-    # commissioner has not reviewed this player yet. Validation treats NULL as
-    # "cannot keep", but the UI shows it as "pending" rather than "no".
+    # Section 5. Defaults to eligible: almost every rostered player clears the
+    # 4-starts-or-9-weeks bar, so opting the exceptions out is far less work
+    # than reviewing 164 players one at a time. Still nullable, so a player can
+    # be explicitly parked as "pending" while the commissioner checks Yahoo.
     eligible = models.BooleanField(
         null=True,
         blank=True,
-        default=None,
+        default=True,
         help_text='Started 4+ weeks, or rostered 9+ weeks. Blank = not yet reviewed.',
     )
     eligibility_note = models.CharField(
@@ -197,6 +197,23 @@ class DraftPick(models.Model):
     def is_traded(self):
         return self.original_team_id != self.current_team_id
 
+    def recompute_owner(self):
+        """Re-derive current_team from original_team plus the trade log.
+
+        current_team is a cache, not an independent fact: the PickTrade rows are
+        the source of truth. Replaying them means correcting or deleting a trade
+        automatically hands the pick back, instead of stranding it with an owner
+        no surviving trade justifies.
+        """
+        owner_id = self.original_team_id
+        for trade in self.trades.order_by('date', 'pk'):
+            owner_id = trade.to_team_id
+
+        if self.current_team_id != owner_id:
+            self.current_team_id = owner_id
+            self.save(update_fields=['current_team'])
+        return self
+
     @property
     def overall_position(self):
         """Section 6. Snake position, derived from the slot -- never stored.
@@ -246,12 +263,27 @@ class PickTrade(models.Model):
             raise ValidationError('That pick belongs to a different season.')
 
     def save(self, *args, **kwargs):
+        # Remember which pick this row pointed at before the edit: if the
+        # commissioner corrects a mis-selected pick, the old one has to be
+        # handed back, not left stranded with the wrong owner.
+        previous_pick_id = (
+            PickTrade.objects.filter(pk=self.pk).values_list('pick_id', flat=True).first()
+            if self.pk else None
+        )
+
         super().save(*args, **kwargs)
+
         # Recording the trade is what moves the pick -- there is no separate
         # step for the commissioner to forget.
-        if self.pick.current_team_id != self.to_team_id:
-            self.pick.current_team = self.to_team
-            self.pick.save(update_fields=['current_team'])
+        self.pick.recompute_owner()
+        if previous_pick_id and previous_pick_id != self.pick_id:
+            DraftPick.objects.get(pk=previous_pick_id).recompute_owner()
+
+    def delete(self, *args, **kwargs):
+        pick = self.pick
+        super().delete(*args, **kwargs)
+        # Deleting the log entry undoes the transfer it recorded.
+        pick.recompute_owner()
 
 
 class KeeperSelection(models.Model):

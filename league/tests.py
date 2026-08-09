@@ -279,6 +279,98 @@ class PickTradeTests(TestCase):
         self.assertEqual(pick.current_team, self.teams['Isaac'])
         self.assertEqual(pick.original_team, self.teams['Marcus'])
 
+    def test_repointing_a_trade_hands_the_old_pick_back(self):
+        """Regression: picking the wrong pick in the admin autocomplete, then
+        correcting it, used to leave the first pick stranded with the new owner
+        forever -- there was no trade left to justify it."""
+        wrong = DraftPick.objects.get(
+            season=self.season, round=2, original_team=self.teams['Ricky']
+        )
+        right = DraftPick.objects.get(
+            season=self.season, round=4, original_team=self.teams['Marcus']
+        )
+
+        trade = PickTrade.objects.create(
+            season=self.season, pick=wrong,
+            from_team=self.teams['Marcus'], to_team=self.teams['Isaac'],
+            date='2026-01-15',
+        )
+        wrong.refresh_from_db()
+        self.assertEqual(wrong.current_team, self.teams['Isaac'])
+
+        trade.pick = right
+        trade.save()
+
+        wrong.refresh_from_db()
+        right.refresh_from_db()
+        self.assertEqual(wrong.current_team, self.teams['Ricky'])   # handed back
+        self.assertEqual(right.current_team, self.teams['Isaac'])
+
+    def test_deleting_a_trade_hands_the_pick_back(self):
+        pick = DraftPick.objects.get(
+            season=self.season, round=4, original_team=self.teams['Marcus']
+        )
+        trade = PickTrade.objects.create(
+            season=self.season, pick=pick,
+            from_team=self.teams['Marcus'], to_team=self.teams['Isaac'],
+            date='2026-01-15',
+        )
+        trade.delete()
+
+        pick.refresh_from_db()
+        self.assertEqual(pick.current_team, self.teams['Marcus'])
+        self.assertFalse(pick.is_traded)
+
+    def test_ownership_replays_the_whole_trade_log_in_date_order(self):
+        """A pick traded on and then on again ends with the last buyer."""
+        pick = DraftPick.objects.get(
+            season=self.season, round=4, original_team=self.teams['Marcus']
+        )
+        PickTrade.objects.create(
+            season=self.season, pick=pick, from_team=self.teams['Marcus'],
+            to_team=self.teams['Isaac'], date='2026-01-15',
+        )
+        PickTrade.objects.create(
+            season=self.season, pick=pick, from_team=self.teams['Isaac'],
+            to_team=self.teams['Luke'], date='2026-02-01',
+        )
+
+        pick.refresh_from_db()
+        self.assertEqual(pick.current_team, self.teams['Luke'])
+
+        # Undo the later trade only: ownership falls back to the earlier buyer.
+        PickTrade.objects.get(to_team=self.teams['Luke']).delete()
+        pick.refresh_from_db()
+        self.assertEqual(pick.current_team, self.teams['Isaac'])
+
+    def test_admin_bulk_delete_hands_picks_back(self):
+        """queryset.delete() skips Model.delete(), so PickTradeAdmin has to
+        re-derive owners itself. Same failure mode as the bug above."""
+        from django.contrib.admin.sites import site
+
+        pick = DraftPick.objects.get(
+            season=self.season, round=4, original_team=self.teams['Marcus']
+        )
+        PickTrade.objects.create(
+            season=self.season, pick=pick, from_team=self.teams['Marcus'],
+            to_team=self.teams['Isaac'], date='2026-01-15',
+        )
+
+        site._registry[PickTrade].delete_queryset(None, PickTrade.objects.all())
+
+        pick.refresh_from_db()
+        self.assertEqual(pick.current_team, self.teams['Marcus'])
+
+    def test_recompute_owner_is_idempotent(self):
+        pick = DraftPick.objects.get(
+            season=self.season, round=6, original_team=self.teams['Isaac']
+        )
+        pick.recompute_owner()
+        pick.recompute_owner()
+
+        pick.refresh_from_db()
+        self.assertEqual(pick.current_team, self.teams['Isaac'])
+
     def test_a_team_cannot_trade_to_itself(self):
         pick = DraftPick.objects.get(
             season=self.season, round=4, original_team=self.teams['Isaac']
@@ -768,8 +860,10 @@ class ViewAccessTests(TestCase):
 
     def test_my_keepers_marks_unreviewed_players_pending(self):
         player = Player.objects.create(name='Unknown Guy', position=Player.Position.RB)
+        # eligible defaults to True, so "pending" now has to be set deliberately.
         RosterEntry.objects.create(
-            season=self.roster_season, team=self.team, player=player, draft_round=5,
+            season=self.roster_season, team=self.team, player=player,
+            draft_round=5, eligible=None,
         )
         self.client.force_login(self.user)
         self.assertContains(self.client.get(reverse('my_keepers')), 'Pending review')

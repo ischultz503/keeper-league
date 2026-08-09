@@ -92,6 +92,14 @@ class PickTradeAdmin(admin.ModelAdmin):
     autocomplete_fields = ['pick', 'from_team', 'to_team']
     date_hierarchy = 'date'
 
+    def delete_queryset(self, request, queryset):
+        """Bulk delete goes through queryset.delete(), which does NOT call
+        Model.delete() -- so the picks have to be re-derived here by hand."""
+        picks = [trade.pick for trade in queryset.select_related('pick')]
+        super().delete_queryset(request, queryset)
+        for pick in picks:
+            pick.recompute_owner()
+
 
 class KeeperSelectionForm(forms.ModelForm):
     """Validates the team's ENTIRE keeper set, not just the row being saved.
