@@ -7,8 +7,8 @@
 ## 1. Keeper Structure
 
 - Each team may keep up to **3 players** per season.
-- Keeper declarations are due **7 days before the draft**.
-- Declarations are **final once submitted** and become **visible to the league at the deadline**.
+- Keeper declarations are due **7 days before the draft**, submitted **privately to the commissioner** (text message). Keepers are secret until the deadline — declarations are never visible to other managers (or entered anywhere they could be seen) before it passes.
+- Declarations are **final once submitted**. After the deadline, the commissioner enters all declarations into the league site, where they become **visible to everyone**.
 - Once the declaration deadline passes, all forfeited picks are locked in.
 
 ## 2. Keeper Costs
@@ -66,7 +66,17 @@ To be kept, a player must meet **at least one** of the following during the seas
 - Slot choices happen in order after the championship, on a **48-hour clock per team**; if a team doesn't respond in time, it is assigned the earliest remaining slot and the clock passes on.
 - Ties (e.g., platform bracket quirks) are broken by regular-season record, then total points for.
 
-**Transition rule — 2026 draft only.** These rules were adopted after the 2025 season ended, so last season's consolation games were played without anyone knowing they would affect draft position. To avoid rewarding results retroactively, the 2026 draft order is: **picks 1–4 to the four non-playoff teams in reverse order of regular-season standings** (no slot choice), and **picks 5–10 to the six playoff teams in reverse order of final finish**. The consolation slot-choice rule above takes effect with the 2026 season's consolation bracket, first applying to the **2027 draft**.
+**Transition rule — 2026 draft only.** These rules were adopted after the 2025 season ended, so the slot-choice mechanism can't apply yet. The 2026 draft order is simply **Yahoo's official final 2025 standings, reversed** (10th place picks 1st, champion picks 10th):
+
+| Pick | Team (Owner) | Pick | Team (Owner) |
+|---|---|---|---|
+| 1 | Stuffed Crust and Olives Must (Ricky) | 6 | Skattman John (Pechman) |
+| 2 | Marvin Gaye & Charbonnet (Jake) | 7 | Prestige Worldwide (Rimler) |
+| 3 | Zimbo Baggins (Isaac) | 8 | The Tone Zone (Nick) |
+| 4 | Lamar Jar Binks (Sonny) | 9 | Wild Card Chris (Chris) |
+| 5 | Portland Pizza Pies (Luke) | 10 | Shedeur for ROTY (Marcus) |
+
+The consolation slot-choice rule above takes effect with the 2026 season's consolation bracket, first applying to the **2027 draft**.
 
 ## 7. Trading Picks and Draft Slots
 
@@ -98,7 +108,7 @@ To be kept, a player must meet **at least one** of the following during the seas
 
 ## Changelog vs. Second Draft (clarifications, not rule changes)
 
-1. Declaration deadline set to **7 days before the draft**; declarations final and revealed at the deadline (was TBD).
+1. Declaration deadline set to **7 days before the draft**; declarations submitted privately by text to the commissioner, final once submitted, revealed to the league after the deadline (was TBD).
 2. **Missing-pick rule added**: no pick in the cost round → forfeit next-earlier owned pick (was unaddressed).
 3. **Cost follows the player**: base cost is fixed on draft day and unaffected by drops/waivers/trades — closes the drop-and-re-add loophole (old wording could be read as any waiver add costing Round 8).
 4. **Same-round collision rule added**: second keeper at the same cost round costs the next-earlier pick (was unaddressed).
@@ -106,6 +116,6 @@ To be kept, a player must meet **at least one** of the following during the seas
 6. Composition limits defined by **current-year keeper cost** after escalation (was ambiguous "draft cost").
 7. Escalation wording clarified: cost moves **one round earlier** per repeat keep (matches the existing chart).
 8. Eligibility clarified: playoff weeks count as started weeks; **IR counts as rostered**.
-9. **Draft order section added**: reverse final finish for playoff teams (picks 5–10); consolation teams earn choice of picks 1–4 by consolation finish; snake format; slots tradeable. For the 2026 draft only, a transition rule applies (reverse regular-season standings for non-playoff teams) since the 2025 consolation bracket was played before this rule existed.
+9. **Draft order section added**: reverse final finish for playoff teams (picks 5–10); consolation teams earn choice of picks 1–4 by consolation finish; snake format; slots tradeable. For the 2026 draft only, the order is Yahoo's final 2025 standings reversed (locked table above), since these rules were adopted after the 2025 season.
 10. **Trade rules added**: only next season's picks tradeable; pick trading freezes at the declaration deadline.
 11. **Governance section added**: commissioner rulings, offseason-only majority-vote rule changes.

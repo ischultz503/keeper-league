@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}League Rules{% endblock %}
+
+{% block content %}
+{% if rules_html %}
+  {# Already converted to HTML and marked safe in the view. The source file is
+     repo-controlled, so this is not user input being trusted. #}
+  <article class="prose">{{ rules_html }}</article>
+{% else %}
+  <h1>League Rules</h1>
+  <p class="error">
+    Could not read <code>docs/keeper_rules_v3.md</code>. The rules file is
+    missing from the deployment.
+  </p>
+{% endif %}
+{% endblock %}

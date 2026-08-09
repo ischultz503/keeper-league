@@ -4,3 +4,4 @@ openpyxl
 ipykernel
 django
 jupyterlab
+markdown

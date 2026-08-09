@@ -1,9 +1,11 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 from django.db import models
 
-# The round a player's keeper cost falls back to when he was drafted late or
-# not at all. See docs/keeper_rules_v3.md section 2.
-LATE_ROUND_COST_FLOOR = 8
+# All keeper rule logic lives in keeper_engine so it stays unit-testable.
+# The models only store data and delegate.
+from .keeper_engine import base_cost, snake_overall
 
 
 class Season(models.Model):
@@ -77,6 +79,22 @@ class RosterEntry(models.Model):
     draft_round = models.PositiveIntegerField(null=True, blank=True)
     overall_pick = models.PositiveIntegerField(null=True, blank=True)
 
+    # Section 5. Three states, which is why this is a nullable boolean rather
+    # than a plain one: True = eligible, False = not eligible, NULL = the
+    # commissioner has not reviewed this player yet. Validation treats NULL as
+    # "cannot keep", but the UI shows it as "pending" rather than "no".
+    eligible = models.BooleanField(
+        null=True,
+        blank=True,
+        default=None,
+        help_text='Started 4+ weeks, or rostered 9+ weeks. Blank = not yet reviewed.',
+    )
+    eligibility_note = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text='Evidence, e.g. "started 6 wks" or "added wk 14".',
+    )
+
     class Meta:
         constraints = [
             # A player appears on exactly one roster per season.
@@ -103,9 +121,197 @@ class RosterEntry(models.Model):
         Drafted in rounds 1-8  -> the round he was drafted in.
         Round 9+ or undrafted  -> a Round 8 pick.
 
-        This is the *base* cost only. Escalation for repeat keeps (section 2,
-        "Escalation for repeat keeps") is Phase 2 and is not applied here.
+        This is the *base* cost only -- it ignores keep history. For the cost a
+        player actually carries this year, use
+        keeper_engine.resolve_current_cost(entry, season), which applies
+        escalation.
         """
-        if self.draft_round is None:
-            return LATE_ROUND_COST_FLOOR
-        return min(self.draft_round, LATE_ROUND_COST_FLOOR)
+        return base_cost(self.draft_round)
+
+    @property
+    def eligibility_label(self):
+        """Human-readable eligibility state for templates and the admin."""
+        if self.eligible is None:
+            return 'Pending review'
+        return 'Eligible' if self.eligible else 'Not eligible'
+
+
+class DraftSlot(models.Model):
+    """A team's position in one season's snake draft (section 6).
+
+    The 2026 order is locked in docs/keeper_rules_v3.md section 6. Later
+    seasons are set by finish order and consolation slot choice, so this is
+    admin-editable rather than computed.
+    """
+
+    season = models.ForeignKey(Season, on_delete=models.CASCADE, related_name='draft_slots')
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='draft_slots')
+    slot = models.PositiveSmallIntegerField(validators=[MinValueValidator(1)])
+
+    class Meta:
+        ordering = ['season', 'slot']
+        constraints = [
+            models.UniqueConstraint(fields=['season', 'slot'], name='unique_slot_per_season'),
+            models.UniqueConstraint(fields=['season', 'team'], name='unique_team_slot_per_season'),
+        ]
+
+    def __str__(self):
+        return f'{self.season.year} slot {self.slot}: {self.team.name}'
+
+
+class DraftPick(models.Model):
+    """One pick in one round of one season's draft.
+
+    original_team is whose slot it is (that never changes); current_team is who
+    owns it after trades. Section 7: "a traded pick is the original team's slot
+    in that round" -- which is why the snake position follows original_team.
+    """
+
+    season = models.ForeignKey(Season, on_delete=models.CASCADE, related_name='draft_picks')
+    round = models.PositiveSmallIntegerField(validators=[MinValueValidator(1)])
+    original_team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='original_picks'
+    )
+    current_team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='owned_picks'
+    )
+    forfeited = models.BooleanField(
+        default=False,
+        help_text='Burned to keep a player. Forfeited slots are skipped in the draft.',
+    )
+
+    class Meta:
+        ordering = ['season', 'round', 'original_team']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['season', 'round', 'original_team'],
+                name='unique_pick_per_team_round',
+            )
+        ]
+
+    def __str__(self):
+        owner = '' if self.original_team_id == self.current_team_id else f' -> {self.current_team.name}'
+        return f'{self.season.year} R{self.round} ({self.original_team.name}{owner})'
+
+    @property
+    def is_traded(self):
+        return self.original_team_id != self.current_team_id
+
+    @property
+    def overall_position(self):
+        """Section 6. Snake position, derived from the slot -- never stored.
+
+        Two queries per call, so this is fine for a pick detail but should be
+        precomputed in bulk for the Phase 3 board grid.
+        """
+        slot = (
+            DraftSlot.objects
+            .filter(season_id=self.season_id, team_id=self.original_team_id)
+            .values_list('slot', flat=True)
+            .first()
+        )
+        if slot is None:
+            return None
+        team_count = DraftSlot.objects.filter(season_id=self.season_id).count()
+        return snake_overall(slot, self.round, team_count)
+
+
+class PickTrade(models.Model):
+    """A record of one pick changing hands (section 7).
+
+    This is an append-only log the commissioner enters; saving one moves the
+    pick. Keeping the log separate from DraftPick.current_team means we can
+    always answer "how did Isaac end up with Marcus's 4th?".
+    """
+
+    season = models.ForeignKey(Season, on_delete=models.CASCADE, related_name='pick_trades')
+    pick = models.ForeignKey(DraftPick, on_delete=models.CASCADE, related_name='trades')
+    from_team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='picks_traded_away')
+    to_team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='picks_traded_for')
+    note = models.CharField(max_length=200, blank=True)
+    date = models.DateField(help_text='When the trade was agreed.')
+
+    class Meta:
+        ordering = ['-date', '-pk']
+
+    def __str__(self):
+        return f'{self.pick} : {self.from_team.owner_name} -> {self.to_team.owner_name}'
+
+    def clean(self):
+        """Model-level validation. Django calls this from ModelForms (so the
+        admin runs it automatically) but NOT from plain .save()."""
+        if self.from_team_id == self.to_team_id:
+            raise ValidationError('A team cannot trade a pick to itself.')
+        if self.pick_id and self.season_id and self.pick.season_id != self.season_id:
+            raise ValidationError('That pick belongs to a different season.')
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # Recording the trade is what moves the pick -- there is no separate
+        # step for the commissioner to forget.
+        if self.pick.current_team_id != self.to_team_id:
+            self.pick.current_team = self.to_team
+            self.pick.save(update_fields=['current_team'])
+
+
+class KeeperSelection(models.Model):
+    """One declared keeper, entered by the commissioner after the deadline.
+
+    Declarations arrive by text (rules section 1) -- nothing here is manager-
+    editable, and nothing exists in the database before the deadline passes.
+
+    roster_entry points at the *prior* season's roster row, which is what
+    carries the draft round the cost derives from.
+    """
+
+    season = models.ForeignKey(Season, on_delete=models.CASCADE, related_name='keeper_selections')
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='keeper_selections')
+    roster_entry = models.ForeignKey(
+        RosterEntry, on_delete=models.CASCADE, related_name='keeper_selections'
+    )
+    cost_round = models.PositiveSmallIntegerField(
+        null=True, blank=True, help_text='Computed by the engine on save.'
+    )
+    burned_pick = models.ForeignKey(
+        DraftPick,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='burned_by',
+        help_text='Computed by the engine on save.',
+    )
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['season', 'team', 'cost_round']
+        constraints = [
+            # One selection per player per season. RosterEntry is already unique
+            # per (season, player), so keying on the entry gives us the
+            # player-level guarantee for free.
+            models.UniqueConstraint(
+                fields=['season', 'roster_entry'], name='unique_keeper_per_season'
+            ),
+            # A pick can only be burned once. Conditional so the many rows with
+            # burned_pick=NULL don't collide with each other.
+            models.UniqueConstraint(
+                fields=['burned_pick'],
+                condition=models.Q(burned_pick__isnull=False),
+                name='unique_burned_pick',
+            ),
+        ]
+
+    def __str__(self):
+        cost = f'R{self.cost_round}' if self.cost_round else 'cost TBD'
+        return f'{self.season.year} {self.team.name}: {self.player.name} ({cost})'
+
+    @property
+    def player(self):
+        return self.roster_entry.player
+
+    def clean(self):
+        if self.roster_entry_id and self.season_id:
+            if self.roster_entry.season.year != self.season.year - 1:
+                raise ValidationError(
+                    f'Keepers for {self.season.year} must come from the '
+                    f'{self.season.year - 1} roster.'
+                )

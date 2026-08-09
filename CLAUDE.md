@@ -25,6 +25,14 @@ Isaac is learning Django. He knows Python well (pandas, Streamlit, Jupyter) but 
 - Plain CSS or a single lightweight CSS file; no frontend build tooling.
 - pandas/openpyxl only in data-import management commands, not in request handling.
 - Windows dev machine; virtualenv at `.venv`; dependencies tracked in `requirements.txt`.
+- Secrets/config live in a git-ignored `.env` file at repo root, loaded with `python-dotenv`; `settings.py` reads `os.environ`. `FANTASYPROS_API_KEY` is there now; move `SECRET_KEY`/`DEBUG` there when touching settings. Never commit `.env` or print key values.
+- ADP data (Phase 4) comes from the FantasyPros API using that key; CSV import is the fallback.
+
+## Locked 2026 draft order (final — Yahoo 2025 final standings reversed)
+
+1 Ricky, 2 Jake, 3 Isaac, 4 Sonny, 5 Luke, 6 Pechman, 7 Rimler, 8 Nick, 9 Chris, 10 Marcus. (Also in the rules doc.)
+
+**2026 pick trades (complete list per Isaac):** Marcus's Round 4 → Isaac; Isaac's Round 13 → Marcus (one trade, seed via PickTrade in Phase 2).
 
 ## Repo layout
 
@@ -37,16 +45,25 @@ Isaac is learning Django. He knows Python well (pandas, Streamlit, Jupyter) but 
 
 ## League facts
 
-10 teams. Owners: Isaac (Zimbo Baggins), Chris, Sonny, Marcus, Rimler, Ricky, Pechman, Jake, Nick, Luke. 6-team playoff, 4-team consolation bracket. Snake draft, ~13+ rounds.
+10 teams. Owners: Isaac (Zimbo Baggins), Chris, Sonny, Marcus, Rimler, Ricky, Pechman, Jake, Nick, Luke. 6-team playoff, 4-team consolation bracket. Snake draft, ~13+ rounds. League platform: Yahoo.
+
+## Product vision
+
+The centerpiece is a **draft board**: the locked 2026 draft order as a grid (10 slots × rounds). Before the keeper deadline it's a planning tool — each manager sees their own keeper options and which board slots a chosen keeper set would burn (computed by the engine: cost round + collision + missing-pick rules), plus every other team's *possible* keepers per slot (public info derived from last year's draft). Managers privately highlight/predict what others will keep and (later) autofill remaining picks from ADP to simulate scenarios.
+
+**Keeper declarations do NOT happen in the app.** Managers text the commissioner privately by the deadline (keeps keepers truly secret — nothing in the DB to leak). After the deadline the commissioner enters all declarations via the admin, the engine validates each set, and the board flips to "revealed" for everyone. In-app declarations are a possible far-future add-on, not part of the plan.
+
+Keeper legality is scenario-dependent: a player's cost round is fixed, but the board slot burned depends on pick inventory and the rest of the keeper set (collision → next-earlier pick; missing pick → next-earlier owned pick). There is NO voluntary overpay — earlier picks burn only when the rules force it.
 
 ## Roadmap (one phase at a time — don't jump ahead)
 
-1. **Scaffold** (current): Django project + `league` app; models for Team, Player, Season, RosterEntry; management command to import `rosters_2025.csv`; admin registration; login-required team page and league overview showing rosters with base keeper cost (draft round, or Round 8 for Round 9+/undrafted).
-2. **Keeper engine**: keeper cost/escalation logic, pick ownership + trades, missing-pick forfeiture, roster composition validation, keeper declaration UI with deadline.
-3. **League views**: declared-keepers reveal, draft board with forfeited slots, keeper history over seasons.
-4. **Docker**: containerize with a production server (gunicorn + whitenoise for static files); Docker Compose with a Caddy service for HTTPS.
-5. **Deploy**: single EC2 instance + Docker Compose, Elastic IP, domain, security groups (22 locked to Isaac's IP, 80/443 open), Caddy/Let's Encrypt HTTPS. Bonus: nightly SQLite backup to S3.
-6. **Cognito (optional, last)**: swap Django login for Cognito hosted UI via OIDC; everything else unchanged.
+1. **Scaffold** (done pending Isaac's review): Django project + `league` app; Season/Team/Player/RosterEntry models; `import_rosters` + `seed_users` commands; admin; login-required league overview + team pages with base keeper cost.
+2. **Keeper engine** (next): draft order + pick ownership + trade models; eligibility flags; pure-Python keeper engine (current cost with escalation, burned-pick computation with collision + missing-pick chains, composition + eligibility validation) with thorough unit tests; commissioner keeper entry via admin with validation; rules tab rendering `docs/keeper_rules_v3.md`.
+3. **Draft board**: the grid view — own-team keeper planning (select set → see burned slots live), other teams' possible keepers per slot, post-deadline revealed board.
+4. **Scenario layer**: private per-user predictions/highlights on others' slots; ADP import via CSV; autofill projected picks to simulate draft scenarios.
+5. **Docker**: containerize (gunicorn + whitenoise); Docker Compose with Caddy for HTTPS.
+6. **Deploy**: single EC2 + Docker Compose, Elastic IP, domain, security groups (22 locked to Isaac's IP, 80/443 open), Caddy/Let's Encrypt. Bonus: nightly SQLite backup to S3.
+7. **Optional, last**: Cognito login via OIDC; Yahoo API integration to auto-compute eligibility (started 4+ weeks / rostered 9+ weeks) — manual admin flags until then.
 
 ## Conventions
 
