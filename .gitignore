@@ -3,6 +3,7 @@ notebooks/
 .venv/
 .env/
 
+data/raw/
 # Python
 __pycache__/
 *.py[cod]
