@@ -51,13 +51,18 @@ POSITION_KEYS = ['player_position_id', 'position_id', 'position', 'pos']
 TEAM_KEYS = ['player_team_id', 'team_id', 'player_team', 'team']
 ADP_KEYS = ['adp', 'player_adp', 'rank_ave', 'avg', 'rank_avg']
 
-CSV_NAME_KEYS = ['Player', 'player', 'Name', 'PLAYER']
+CSV_NAME_KEYS = ['PLAYER NAME', 'Player', 'player', 'Name', 'PLAYER']
 CSV_POSITION_KEYS = ['POS', 'Pos', 'Position', 'position']
-CSV_TEAM_KEYS = ['Team', 'TEAM', 'team', 'Tm']
-# Deliberately NOT "Rank": a FantasyPros ADP export has both, and Rank is the
-# ordering while AVG is the actual average draft position. Falling back to Rank
-# would quietly substitute one for the other.
+CSV_TEAM_KEYS = ['TEAM', 'Team', 'team', 'Tm']
+
+# FantasyPros publishes two different exports:
+#   * an ADP export, with an AVG column holding true average draft position;
+#   * a Rankings export, with only RK (expert consensus rank).
+# Prefer real ADP. Fall back to the rank column ONLY when the file has no ADP
+# column at all -- inside an ADP export, RK is the ordering and AVG is the
+# measurement, so treating one as the other there would silently swap them.
 CSV_ADP_KEYS = ['AVG', 'ADP', 'Avg', 'adp']
+CSV_RANK_KEYS = ['RK', 'RANK', 'Rank', 'rk']
 
 
 def first_value(row, keys):
@@ -87,16 +92,44 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         if options['csv']:
-            rows, source = self.read_csv(Path(options['csv'])), f"CSV {options['csv']}"
+            rows = self.read_csv(Path(options['csv']))
+            source = f"CSV {options['csv']}"
+            value_keys = self.resolve_csv_value_keys(rows)
         else:
             rows = self.fetch_api(options['season'], options['scoring'])
             source = f"FantasyPros API ({options['season']}, {options['scoring']} scoring)"
+            value_keys = ADP_KEYS
 
         if not rows:
             raise CommandError(f'No rows returned from {source}.')
 
         self.stdout.write(f'{len(rows)} rows from {source}')
-        self.apply(rows, dry_run=options['dry_run'])
+        self.apply(rows, value_keys, dry_run=options['dry_run'])
+
+    def resolve_csv_value_keys(self, rows):
+        """Decide once, from the header, which column carries the ordering."""
+        if not rows:
+            return CSV_ADP_KEYS
+
+        columns = set(rows[0])
+
+        if columns & set(CSV_ADP_KEYS):
+            return CSV_ADP_KEYS
+
+        if columns & set(CSV_RANK_KEYS):
+            self.stdout.write(self.style.WARNING(
+                '  This file has no ADP column, so expert consensus rank (RK) is '
+                'being used as the draft ordering instead.\n'
+                '  That is a fine "best available" order for the simulator, but it '
+                'is not average draft position.\n'
+                '  For true ADP, export from fantasypros.com/nfl/adp/'
+                'half-point-ppr-overall.php\n'
+            ))
+            return CSV_RANK_KEYS
+
+        raise CommandError(
+            f'No ADP or rank column found. Columns were: {sorted(columns)}'
+        )
 
     # -- sources ------------------------------------------------------------
 
@@ -163,7 +196,7 @@ class Command(BaseCommand):
     # -- applying -----------------------------------------------------------
 
     @transaction.atomic
-    def apply(self, rows, dry_run=False):
+    def apply(self, rows, value_keys, dry_run=False):
         players = list(Player.objects.all())
         index = build_index(players)
         now = timezone.now()
@@ -174,7 +207,7 @@ class Command(BaseCommand):
             name = first_value(row, NAME_KEYS + CSV_NAME_KEYS)
             position = first_value(row, POSITION_KEYS + CSV_POSITION_KEYS)
             team = first_value(row, TEAM_KEYS + CSV_TEAM_KEYS)
-            adp = to_float(first_value(row, ADP_KEYS + CSV_ADP_KEYS))
+            adp = to_float(first_value(row, value_keys))
 
             if not name or adp is None:
                 skipped += 1
@@ -200,30 +233,28 @@ class Command(BaseCommand):
     def report(self, matched, unmatched, skipped, dry_run):
         total = Player.objects.count()
         self.stdout.write(
-            f'matched: {len(matched)} of {total} players | '
-            f'source rows with no usable name/ADP: {skipped}'
+            f'matched: {len(matched)} of {total} rostered players | '
+            f'rows for players nobody rosters: {len(unmatched)} (expected -- the '
+            f'file covers the whole NFL) | unusable rows: {skipped}'
         )
 
-        if unmatched:
-            self.stdout.write('')
-            self.stdout.write(self.style.WARNING(
-                f'{len(unmatched)} rostered-position players could not be matched. '
-                f'These are reported, not guessed -- fix the name in the admin if '
-                f'one of them is really on a roster:'
-            ))
-            for label in unmatched[:40]:
-                self.stdout.write(f'    {label}')
-            if len(unmatched) > 40:
-                self.stdout.write(f'    ... and {len(unmatched) - 40} more')
-
-        missing = Player.objects.filter(adp__isnull=True).count()
-        if missing:
-            self.stdout.write('')
-            self.stdout.write(f'{missing} of our players still have no ADP:')
-            for player in Player.objects.filter(adp__isnull=True)[:25]:
-                self.stdout.write(f'    {player.name} ({player.position})')
-
+        # The actionable signal is the inverse of "unmatched source rows": a
+        # player of OURS with no ADP is the one that suggests a name mismatch.
+        # Reporting the 650-odd NFL players we don't roster would bury it.
         if dry_run:
             self.stdout.write(self.style.WARNING('\nDry run -- nothing saved.'))
-        else:
-            self.stdout.write(self.style.SUCCESS('\nADP import complete.'))
+            return
+
+        stranded = list(Player.objects.filter(adp__isnull=True))
+        if stranded:
+            self.stdout.write('')
+            self.stdout.write(self.style.WARNING(
+                f'{len(stranded)} rostered player(s) got no ADP. Check for a name '
+                f'mismatch against the source file, and fix ours in the admin:'
+            ))
+            for player in stranded[:30]:
+                self.stdout.write(f'    {player.name} ({player.position})')
+            if len(stranded) > 30:
+                self.stdout.write(f'    ... and {len(stranded) - 30} more')
+
+        self.stdout.write(self.style.SUCCESS('\nADP import complete.'))

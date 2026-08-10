@@ -937,13 +937,20 @@ class ImportAdpCsvTests(TestCase):
         self.eagles.refresh_from_db()
         self.assertEqual(self.eagles.adp, 140.2)
 
-    def test_unmatched_names_are_reported_not_guessed(self):
+    def test_our_players_left_without_adp_are_named_for_review(self):
+        """The file covers the whole NFL, so most rows matching nobody is
+        normal and listing them buries the signal. What needs a human is one of
+        OUR players coming out with no ADP -- that suggests a name mismatch."""
         out = StringIO()
         path = self.write_csv(['1,Some Rookie,KC,RB1,88.0'])
         call_command('import_adp', csv=path, stdout=out)
 
-        self.assertIn('Some Rookie', out.getvalue())
-        self.assertIn('could not be matched', out.getvalue())
+        output = out.getvalue()
+        self.assertIn('Ashton Jeanty', output)
+        self.assertIn('name mismatch', output)
+        # The unrostered NFL player is counted, not listed.
+        self.assertNotIn('Some Rookie', output)
+        self.assertIn('rows for players nobody rosters: 1', output)
 
     def test_import_is_idempotent(self):
         path = self.write_csv(['1,Ashton Jeanty,LV,RB1,3.4'])
@@ -960,6 +967,37 @@ class ImportAdpCsvTests(TestCase):
 
         self.jeanty.refresh_from_db()
         self.assertIsNone(self.jeanty.adp)
+
+    def test_a_rankings_export_falls_back_to_the_rank_column(self):
+        """FantasyPros' Rankings export has RK but no AVG. Using RK as the
+        draft ordering is correct there -- and the warning must say so."""
+        out = StringIO()
+        path = self.write_csv(
+            ['"1",1,"Ashton Jeanty",LV,"RB1","10"'],
+            header='"RK",TIERS,"PLAYER NAME",TEAM,"POS","BYE WEEK"',
+        )
+        call_command('import_adp', csv=path, stdout=out)
+
+        self.jeanty.refresh_from_db()
+        self.assertEqual(self.jeanty.adp, 1.0)
+        self.assertEqual(self.jeanty.nfl_team, 'LV')
+        self.assertIn('no ADP column', out.getvalue())
+
+    def test_an_adp_export_prefers_avg_over_rank(self):
+        """When both columns exist, RK is the ordering and AVG is the
+        measurement -- taking RK would silently swap them."""
+        path = self.write_csv(
+            ['1,Ashton Jeanty,LV,RB1,3.4'], header='Rank,Player,Team,POS,AVG'
+        )
+        call_command('import_adp', csv=path, stdout=StringIO())
+
+        self.jeanty.refresh_from_db()
+        self.assertEqual(self.jeanty.adp, 3.4)      # not 1.0
+
+    def test_a_csv_with_no_ordering_column_is_a_clean_error(self):
+        path = self.write_csv(['Ashton Jeanty,LV'], header='Player,Team')
+        with self.assertRaises(CommandError):
+            call_command('import_adp', csv=path, stdout=StringIO())
 
     def test_a_missing_csv_is_a_clean_error(self):
         with self.assertRaises(CommandError):

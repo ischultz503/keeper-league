@@ -45,7 +45,7 @@ Isaac is learning Django. He knows Python well (pandas, Streamlit, Jupyter) but 
 
 ## League facts
 
-10 teams. Owners: Isaac (Zimbo Baggins), Chris, Sonny, Marcus, Rimler, Ricky, Pechman, Jake, Nick, Luke. 6-team playoff, 4-team consolation bracket. Snake draft, ~13+ rounds. League platform: Yahoo.
+10 teams. Owners: Isaac (Zimbo Baggins), Chris, Sonny, Marcus, Rimler, Ricky, Pechman, Jake, Nick, Luke. 6-team playoff, 4-team consolation bracket. Snake draft, ~13+ rounds. League platform: Yahoo. Scoring: **half-PPR** (0.5/reception) — determines which FantasyPros ADP list to import.
 
 ## Product vision
 
