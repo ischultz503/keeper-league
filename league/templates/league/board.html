@@ -60,7 +60,8 @@
   {% if own_team and not revealed %}
   <aside class="sandbox" id="sandbox"
          data-preview-url="{% url 'keeper_preview' %}"
-         data-team-id="{{ own_team.pk }}">
+         data-team-id="{{ own_team.pk }}"
+         data-season="{{ season.year }}">
     <h2>Try a keeper set</h2>
     <p class="subtle">{{ own_team.name }} &middot; pick up to 3</p>
 
@@ -102,6 +103,11 @@
     <p class="note">
       Nothing here is saved or visible to anyone else. Declare your keepers by
       texting the commissioner before the deadline.
+    </p>
+    <p class="note subtle">
+      Your ticks are remembered in <strong>this browser tab only</strong>, so
+      they survive locking a prediction. Closing the tab forgets them &mdash;
+      worth knowing on a shared computer.
     </p>
   </aside>
   {% endif %}

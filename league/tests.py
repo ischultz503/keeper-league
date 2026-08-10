@@ -1751,6 +1751,13 @@ class BoardViewTests(TestCase):
         # control carries a CSRF token rather than a link.
         self.assertIn('csrfmiddlewaretoken', html)
 
+    def test_the_sandbox_is_keyed_by_season_for_browser_storage(self):
+        """Ticks survive the redirect a prediction lock causes, per tab."""
+        html = self.client.get(reverse('board')).content.decode()
+
+        self.assertIn(f'data-season="{self.season.year}"', html)
+        self.assertIn('this browser tab only', html)
+
     def test_the_board_script_loads_even_without_a_sandbox(self):
         """The simulate button is on the page for everyone, sandbox or not."""
         self.season.keepers_revealed = True

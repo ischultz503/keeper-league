@@ -66,6 +66,47 @@
                 .map(function (b) { return parseInt(b.value, 10); });
   }
 
+  /* Locking a prediction is a form POST and a redirect, which reloads the page
+   * and empties these checkboxes. So the ticks are stashed in the browser.
+   *
+   * sessionStorage, NOT localStorage: it dies with the tab. This is the
+   * manager's real keeper plan, which the whole design keeps out of the
+   * database (rules section 1) -- the shortest lifetime that still survives a
+   * redirect is the right one, and a shared computer forgets it on close.
+   * Keyed by season so next year starts clean. */
+  var storageKey = sandbox ? 'keeper-sandbox-' + (sandbox.dataset.season || '') : null;
+
+  function saveSelection() {
+    if (!storageKey) return;
+    // Private-browsing modes can throw on write. Losing the ticks is a small
+    // annoyance; a thrown exception would take the whole sandbox down with it.
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(selectedIds()));
+    } catch (e) { /* no storage available -- carry on without it */ }
+  }
+
+  function restoreSelection() {
+    if (!storageKey) return false;
+
+    var saved;
+    try {
+      saved = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
+    } catch (e) {
+      return false;
+    }
+    if (!Array.isArray(saved) || saved.length === 0) return false;
+
+    // Match on the ids still rendered: a player dropped from the roster since
+    // the tick simply does not come back. Capped, so a hand-edited store can
+    // never push an over-limit set at the server.
+    var wanted = saved.slice(0, MAX_KEEPERS).map(String);
+    boxes.forEach(function (box) {
+      box.checked = wanted.indexOf(box.value) !== -1;
+    });
+
+    return selectedIds().length > 0;
+  }
+
   function enforceMax() {
     var atLimit = selectedIds().length >= MAX_KEEPERS;
     boxes.forEach(function (b) {
@@ -187,6 +228,7 @@
     enforceMax();
     var ids = selectedIds();
 
+    saveSelection();
     paintSwatches();
     // Any projection on screen was computed from the previous selection, so it
     // is now wrong -- a keeper burns a pick, which moves everyone drafted after
@@ -205,7 +247,14 @@
   }
 
   boxes.forEach(function (box) { box.addEventListener('change', preview); });
-  enforceMax();
+
+  // Re-run the preview after restoring, so the sidebar verdict and the burned
+  // cells match the ticks rather than lagging a page behind them.
+  if (restoreSelection()) {
+    preview();
+  } else {
+    enforceMax();
+  }
 
   /* --- Simulation -------------------------------------------------------- */
 
