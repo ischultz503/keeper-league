@@ -48,6 +48,34 @@ def defense_key(name):
     return tokens[-1] if tokens else ''
 
 
+# FantasyPros ADP exports pack name, NFL team and bye week into one column:
+#   "Jahmyr Gibbs   DET (6)"        -> name + team + bye
+#   "Houston Texans DST   (8)"      -> the team slot holds DST, not a team code
+#   "Tyreek Hill"                   -> free agent: no team, no bye
+BYE_SUFFIX = re.compile(r'\s*\(\d+\)\s*$')
+TEAM_CODE = re.compile(r'^[A-Z]{2,3}$')
+
+
+def split_player_and_team(value):
+    """Pull (name, nfl_team) out of a combined FantasyPros player cell.
+
+    Returns an empty team when the cell doesn't carry one, which covers both
+    free agents and defenses -- for a defense the trailing token is the literal
+    "DST", and treating it as a team code would also corrupt the nickname the
+    defense is matched on.
+    """
+    text = BYE_SUFFIX.sub('', (value or '').strip())
+    tokens = text.split()
+
+    team = ''
+    if tokens and TEAM_CODE.match(tokens[-1]):
+        last = tokens.pop()
+        if last not in POSITION_ALIASES:
+            team = last
+
+    return ' '.join(tokens), team
+
+
 def normalize_position(position):
     """Map a source position code onto our Player.Position values.
 

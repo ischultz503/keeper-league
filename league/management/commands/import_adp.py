@@ -33,7 +33,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
-from league.adp import build_index, find_player, normalize_position
+from league.adp import build_index, find_player, normalize_position, split_player_and_team
 from league.models import Player
 
 API_URL = 'https://api.fantasypros.com/public/v2/json/nfl/{season}/consensus-rankings'
@@ -51,7 +51,7 @@ POSITION_KEYS = ['player_position_id', 'position_id', 'position', 'pos']
 TEAM_KEYS = ['player_team_id', 'team_id', 'player_team', 'team']
 ADP_KEYS = ['adp', 'player_adp', 'rank_ave', 'avg', 'rank_avg']
 
-CSV_NAME_KEYS = ['PLAYER NAME', 'Player', 'player', 'Name', 'PLAYER']
+CSV_NAME_KEYS = ['PLAYER NAME', 'Player (Bye)', 'Player', 'player', 'Name', 'PLAYER']
 CSV_POSITION_KEYS = ['POS', 'Pos', 'Position', 'position']
 CSV_TEAM_KEYS = ['TEAM', 'Team', 'team', 'Tm']
 
@@ -89,6 +89,15 @@ class Command(BaseCommand):
         parser.add_argument(
             '--dry-run', action='store_true', help='Report matches without saving.'
         )
+        parser.add_argument(
+            '--replace',
+            action='store_true',
+            help=(
+                'Clear every existing ADP first, so this file becomes the only '
+                'source. Use when switching between exports -- otherwise players '
+                'absent from the new file keep values on a different scale.'
+            ),
+        )
 
     def handle(self, *args, **options):
         if options['csv']:
@@ -104,7 +113,9 @@ class Command(BaseCommand):
             raise CommandError(f'No rows returned from {source}.')
 
         self.stdout.write(f'{len(rows)} rows from {source}')
-        self.apply(rows, value_keys, dry_run=options['dry_run'])
+        self.apply(
+            rows, value_keys, dry_run=options['dry_run'], replace=options['replace']
+        )
 
     def resolve_csv_value_keys(self, rows):
         """Decide once, from the header, which column carries the ordering."""
@@ -196,7 +207,13 @@ class Command(BaseCommand):
     # -- applying -----------------------------------------------------------
 
     @transaction.atomic
-    def apply(self, rows, value_keys, dry_run=False):
+    def apply(self, rows, value_keys, dry_run=False, replace=False):
+        if replace and not dry_run:
+            # Inside the same atomic block as the writes, so a failure part-way
+            # cannot leave the table wiped.
+            cleared = Player.objects.filter(adp__isnull=False).update(adp=None)
+            self.stdout.write(f'cleared {cleared} existing ADP values')
+
         players = list(Player.objects.all())
         index = build_index(players)
         now = timezone.now()
@@ -204,10 +221,14 @@ class Command(BaseCommand):
         matched, unmatched, skipped = [], [], 0
 
         for row in rows:
-            name = first_value(row, NAME_KEYS + CSV_NAME_KEYS)
+            raw_name = first_value(row, NAME_KEYS + CSV_NAME_KEYS)
             position = first_value(row, POSITION_KEYS + CSV_POSITION_KEYS)
-            team = first_value(row, TEAM_KEYS + CSV_TEAM_KEYS)
             adp = to_float(first_value(row, value_keys))
+
+            # Some exports carry a TEAM column; the ADP export instead packs the
+            # team into the player cell. Prefer the explicit column when present.
+            name, parsed_team = split_player_and_team(raw_name)
+            team = first_value(row, TEAM_KEYS + CSV_TEAM_KEYS) or parsed_team
 
             if not name or adp is None:
                 skipped += 1

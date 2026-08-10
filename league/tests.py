@@ -863,6 +863,27 @@ class NameNormalizationTests(SimpleTestCase):
         self.assertEqual(adp.normalize_name('Ronnie Bell'), 'ronnie bell')
         self.assertEqual(adp.normalize_name('Audric Estimé'), 'audric estime')
 
+    def test_combined_player_cell_splits_into_name_and_team(self):
+        """The ADP export packs everything into one column."""
+        self.assertEqual(
+            adp.split_player_and_team('Jahmyr Gibbs   DET (6)'), ('Jahmyr Gibbs', 'DET')
+        )
+        self.assertEqual(
+            adp.split_player_and_team("Ka'imi Fairbairn   HOU (8)"),
+            ("Ka'imi Fairbairn", 'HOU'),
+        )
+
+    def test_a_defense_cell_does_not_treat_dst_as_a_team(self):
+        """"Houston Texans DST (8)" -- the trailing token is a position marker.
+        Keeping it would also break the nickname the defense matches on."""
+        name, team = adp.split_player_and_team('Houston Texans DST   (8)')
+        self.assertEqual(name, 'Houston Texans')
+        self.assertEqual(team, '')
+        self.assertEqual(adp.defense_key(name), 'texans')
+
+    def test_a_free_agent_cell_has_no_team_or_bye(self):
+        self.assertEqual(adp.split_player_and_team('Tyreek Hill'), ('Tyreek Hill', ''))
+
     def test_defense_matches_on_nickname(self):
         self.assertEqual(adp.defense_key('Philadelphia Eagles'), 'eagles')
         self.assertEqual(adp.defense_key('Eagles'), 'eagles')
@@ -993,6 +1014,38 @@ class ImportAdpCsvTests(TestCase):
 
         self.jeanty.refresh_from_db()
         self.assertEqual(self.jeanty.adp, 3.4)      # not 1.0
+
+    def test_an_adp_export_with_a_combined_player_column(self):
+        """The real FantasyPros ADP export shape, end to end."""
+        path = self.write_csv(
+            [
+                '1,Ashton Jeanty   LV (10),RB1,11.0',
+                '120,Philadelphia Eagles DST   (10),DST1,147.7',
+            ],
+            header='Rank,Player (Bye),POS,AVG',
+        )
+        call_command('import_adp', csv=path, stdout=StringIO())
+
+        self.jeanty.refresh_from_db()
+        self.eagles.refresh_from_db()
+        self.assertEqual(self.jeanty.adp, 11.0)
+        self.assertEqual(self.jeanty.nfl_team, 'LV')
+        self.assertEqual(self.eagles.adp, 147.7)
+
+    def test_replace_clears_values_absent_from_the_new_file(self):
+        """Switching exports must not leave two different scales in one column."""
+        first = self.write_csv(['1,Travis Etienne,JAC,RB1,55.1'])
+        call_command('import_adp', csv=first, stdout=StringIO())
+        self.etienne.refresh_from_db()
+        self.assertEqual(self.etienne.adp, 55.1)
+
+        second = self.write_csv(['1,Ashton Jeanty,LV,RB1,3.4'])
+        call_command('import_adp', csv=second, replace=True, stdout=StringIO())
+
+        self.etienne.refresh_from_db()
+        self.jeanty.refresh_from_db()
+        self.assertIsNone(self.etienne.adp)
+        self.assertEqual(self.jeanty.adp, 3.4)
 
     def test_a_csv_with_no_ordering_column_is_a_clean_error(self):
         path = self.write_csv(['Ashton Jeanty,LV'], header='Player,Team')
