@@ -8,6 +8,8 @@ that depends on pick inventory or keep history needs real rows, so it uses
 TestCase.
 """
 
+import json
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase
@@ -421,6 +423,18 @@ class BurnResolutionTests(TestCase):
         self.assertTrue(result.ok)
         self.assertEqual(self.rounds_burned(result), [5])
         self.assertFalse(result.assignments[0].walked)
+        self.assertEqual(result.assignments[0].via, engine.VIA_BASE)
+
+    def test_via_distinguishes_a_collision_from_a_missing_pick(self):
+        """Both rules walk earlier, but for different reasons, and the board
+        explains which to the manager."""
+        collision = self.burn(self.isaac, [8, 8])
+        walked = [a for a in collision.assignments if a.walked]
+        self.assertEqual([a.via for a in walked], [engine.VIA_COLLISION])
+
+        self.give_away(self.marcus, 4)
+        missing = self.burn(self.marcus, [4])
+        self.assertEqual(missing.assignments[0].via, engine.VIA_MISSING)
 
     def test_missing_pick_walks_to_the_next_earlier_round(self):
         """Rules doc worked example: Marcus traded his R4 away, so keeping a
@@ -784,6 +798,276 @@ class AdminKeeperEntryTests(TestCase):
 
 
 # --- Views ------------------------------------------------------------------
+
+
+class BoardViewTests(TestCase):
+    """The draft board grid."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.roster_season = Season.objects.create(year=2025)
+        cls.season = Season.objects.create(year=2026)
+        cls.teams = make_teams()
+        make_draft(cls.season, cls.teams)
+        cls.isaac = cls.teams['Isaac']
+        cls.marcus = cls.teams['Marcus']
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+        self.client.force_login(self.user)
+
+    def test_board_renders_every_team_in_slot_order(self):
+        response = self.client.get(reverse('board'))
+        self.assertEqual(response.status_code, 200)
+
+        owners = [s.team.owner_name for s in response.context['slots']]
+        self.assertEqual(owners, OWNERS)
+        self.assertEqual(len(response.context['rows']), ROUNDS)
+
+    def test_rows_alternate_snake_direction(self):
+        rows = self.client.get(reverse('board')).context['rows']
+        self.assertTrue(rows[0]['forward'])       # round 1, left to right
+        self.assertFalse(rows[1]['forward'])      # round 2, right to left
+
+    def test_a_traded_pick_is_badged_with_its_current_owner(self):
+        pick = DraftPick.objects.get(
+            season=self.season, round=4, original_team=self.marcus
+        )
+        PickTrade.objects.create(
+            season=self.season, pick=pick, from_team=self.marcus,
+            to_team=self.isaac, date='2026-01-15',
+        )
+
+        response = self.client.get(reverse('board'))
+        cell = self.cell_for(response, round_number=4, team=self.marcus)
+
+        # Stays in Marcus's column, badged with the new owner.
+        self.assertEqual(cell['traded_to'], self.isaac)
+        self.assertContains(response, '&rarr; Isaac')
+
+    def cell_for(self, response, round_number, team):
+        slots = response.context['slots']
+        column = [s.team_id for s in slots].index(team.pk)
+        row = next(r for r in response.context['rows'] if r['round'] == round_number)
+        return row['cells'][column]
+
+    def test_candidates_are_listed_by_current_year_cost(self):
+        make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        response = self.client.get(reverse('board'))
+
+        cell = self.cell_for(response, round_number=4, team=self.marcus)
+        self.assertIn('Jaxon Smith-Njigba', [e.player.name for e in cell['candidates']])
+        self.assertContains(response, 'Jaxon Smith-Njigba')
+
+    def test_ineligible_players_are_left_off_the_board(self):
+        make_entry(self.roster_season, self.marcus, 'Bench Guy', 4, eligible=False)
+        response = self.client.get(reverse('board'))
+
+        cell = self.cell_for(response, round_number=4, team=self.marcus)
+        self.assertEqual(cell['candidates'], [])
+
+    def test_pending_players_are_shown_but_marked(self):
+        entry = make_entry(self.roster_season, self.marcus, 'Unreviewed Guy', 4)
+        entry.eligible = None
+        entry.save(update_fields=['eligible'])
+
+        response = self.client.get(reverse('board'))
+        self.assertContains(response, 'Unreviewed Guy')
+        self.assertContains(response, 'pending')
+
+    def test_candidates_are_capped_at_three_with_an_expander(self):
+        for i in range(5):
+            make_entry(self.roster_season, self.marcus, f'Guy {i}', 4)
+
+        cell = self.cell_for(self.client.get(reverse('board')), 4, self.marcus)
+        self.assertEqual(len(cell['candidates']), 3)
+        self.assertEqual(len(cell['extra_candidates']), 2)
+
+    def test_revealed_board_shows_keepers_and_hides_candidates(self):
+        entry = make_entry(self.roster_season, self.isaac, 'Rashee Rice', 8)
+        KeeperSelection.objects.create(
+            season=self.season, team=self.isaac, roster_entry=entry
+        )
+        engine.recompute_team_selections(self.isaac, self.season)
+
+        self.season.keepers_revealed = True
+        self.season.save(update_fields=['keepers_revealed'])
+
+        response = self.client.get(reverse('board'))
+        cell = self.cell_for(response, round_number=8, team=self.isaac)
+
+        self.assertTrue(response.context['revealed'])
+        self.assertIsNotNone(cell['keeper'])
+        self.assertEqual(cell['keeper'].player.name, 'Rashee Rice')
+        self.assertEqual(cell['candidates'], [])
+
+    def test_the_sandbox_is_hidden_once_keepers_are_revealed(self):
+        make_entry(self.roster_season, self.isaac, 'Rashee Rice', 8)
+        self.assertContains(self.client.get(reverse('board')), 'id="sandbox"')
+
+        self.season.keepers_revealed = True
+        self.season.save(update_fields=['keepers_revealed'])
+
+        self.assertNotContains(self.client.get(reverse('board')), 'id="sandbox"')
+
+    def test_sandbox_lists_only_the_managers_own_eligible_players(self):
+        mine = make_entry(self.roster_season, self.isaac, 'My Guy', 5)
+        make_entry(self.roster_season, self.isaac, 'My Bench Guy', 5, eligible=False)
+        make_entry(self.roster_season, self.marcus, 'Their Guy', 5)
+
+        players = self.client.get(reverse('board')).context['sandbox_players']
+        self.assertEqual([p['entry'].pk for p in players], [mine.pk])
+
+
+class KeeperPreviewApiTests(TestCase):
+    """POST /api/keeper-preview/ -- the sandbox's engine call."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.roster_season = Season.objects.create(year=2025)
+        cls.season = Season.objects.create(year=2026)
+        cls.teams = make_teams()
+        make_draft(cls.season, cls.teams)
+        cls.isaac = cls.teams['Isaac']
+        cls.marcus = cls.teams['Marcus']
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+        self.client.force_login(self.user)
+
+    def preview(self, entries):
+        return self.client.post(
+            reverse('keeper_preview'),
+            data=json.dumps({'entry_ids': [e.pk for e in entries]}),
+            content_type='application/json',
+        )
+
+    def test_anonymous_users_are_rejected(self):
+        self.client.logout()
+        response = self.client.post(
+            reverse('keeper_preview'), data='{}', content_type='application/json'
+        )
+        self.assertIn(response.status_code, (302, 403))
+        if response.status_code == 302:
+            self.assertIn(reverse('login'), response.url)
+
+    def test_get_is_not_allowed(self):
+        self.assertEqual(self.client.get(reverse('keeper_preview')).status_code, 405)
+
+    def test_a_simple_set_burns_its_own_cost_round(self):
+        entry = make_entry(self.roster_season, self.isaac, 'Ladd McConkey', 3)
+        data = self.preview([entry]).json()
+
+        self.assertTrue(data['valid'])
+        self.assertEqual(len(data['burned']), 1)
+        self.assertEqual(data['burned'][0]['round'], 3)
+        self.assertEqual(data['burned'][0]['via'], engine.VIA_BASE)
+        self.assertEqual(data['burned'][0]['player'], 'Ladd McConkey')
+
+    def test_two_round_8_keepers_collide_onto_round_7(self):
+        rice = make_entry(self.roster_season, self.isaac, 'Rashee Rice', 8)
+        shakir = make_entry(self.roster_season, self.isaac, 'Khalil Shakir', 10)
+
+        data = self.preview([rice, shakir]).json()
+        self.assertTrue(data['valid'])
+
+        by_round = {b['round']: b for b in data['burned']}
+        self.assertEqual(sorted(by_round), [7, 8])
+        self.assertEqual(by_round[8]['via'], engine.VIA_BASE)
+        self.assertEqual(by_round[7]['via'], engine.VIA_COLLISION)
+
+    def test_a_missing_pick_walks_to_the_next_earlier_round(self):
+        """Marcus keeps JSN (R4) after trading his R4 to Isaac -> burns his R3."""
+        marcus_user = get_user_model().objects.create_user('marcus', password='test-pass-1234')
+        self.marcus.user = marcus_user
+        self.marcus.save(update_fields=['user'])
+
+        pick = DraftPick.objects.get(season=self.season, round=4, original_team=self.marcus)
+        PickTrade.objects.create(
+            season=self.season, pick=pick, from_team=self.marcus,
+            to_team=self.isaac, date='2026-01-15',
+        )
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+
+        self.client.force_login(marcus_user)
+        data = self.preview([jsn]).json()
+
+        self.assertTrue(data['valid'])
+        self.assertEqual(data['burned'][0]['round'], 3)
+        self.assertEqual(data['burned'][0]['cost_round'], 4)
+        self.assertEqual(data['burned'][0]['via'], engine.VIA_MISSING)
+
+    def test_more_than_three_keepers_is_rejected(self):
+        entries = [make_entry(self.roster_season, self.isaac, f'Guy {i}', 9) for i in range(4)]
+        response = self.preview(entries)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('at most 3', response.json()['error'])
+
+    def test_a_manager_cannot_preview_another_teams_players(self):
+        """The endpoint scopes the lookup to request.user's own team, so
+        another team's entry ids simply do not resolve."""
+        theirs = make_entry(self.roster_season, self.marcus, 'Their Guy', 4)
+        response = self.preview([theirs])
+
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn('Their Guy', response.content.decode())
+
+    def test_mixing_in_another_teams_player_is_rejected(self):
+        mine = make_entry(self.roster_season, self.isaac, 'My Guy', 5)
+        theirs = make_entry(self.roster_season, self.marcus, 'Their Guy', 4)
+
+        self.assertEqual(self.preview([mine, theirs]).status_code, 403)
+
+    def test_illegal_sets_return_errors_rather_than_failing(self):
+        jeanty = make_entry(self.roster_season, self.isaac, 'Ashton Jeanty', 2)
+        bowers = make_entry(self.roster_season, self.isaac, 'Brock Bowers', 2)
+
+        data = self.preview([jeanty, bowers]).json()
+        self.assertFalse(data['valid'])
+        self.assertTrue(any('Rounds 1-2' in e for e in data['errors']))
+
+    def test_a_user_without_a_team_is_refused(self):
+        stranger = get_user_model().objects.create_user('commish', password='test-pass-1234')
+        self.client.force_login(stranger)
+        response = self.client.post(
+            reverse('keeper_preview'),
+            data=json.dumps({'entry_ids': []}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_malformed_json_is_rejected_cleanly(self):
+        response = self.client.post(
+            reverse('keeper_preview'), data='not json', content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_response_shape_matches_what_board_js_reads(self):
+        """Contract test. board.js reads these exact keys; renaming one would
+        otherwise break the board silently, with no server-side error."""
+        entry = make_entry(self.roster_season, self.isaac, 'Rashee Rice', 8)
+        data = self.preview([entry]).json()
+
+        self.assertEqual(set(data), {'valid', 'errors', 'warnings', 'burned'})
+        self.assertEqual(
+            set(data['burned'][0]),
+            {'pick_id', 'round', 'cost_round', 'via', 'player'},
+        )
+
+    def test_the_endpoint_never_writes(self):
+        """It is a sandbox: declarations happen by text, not here."""
+        entry = make_entry(self.roster_season, self.isaac, 'Rashee Rice', 8)
+        self.preview([entry])
+
+        self.assertEqual(KeeperSelection.objects.count(), 0)
+        self.assertEqual(
+            DraftPick.objects.filter(season=self.season, forfeited=True).count(), 0
+        )
 
 
 class RosterOrderingTests(TestCase):

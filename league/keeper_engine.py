@@ -11,7 +11,7 @@ database-touching functions import what they need *inside* the function body --
 a standard Django idiom for breaking exactly this cycle.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 # --- Rule constants (docs/keeper_rules_v3.md) --------------------------------
 
@@ -127,11 +127,70 @@ def resolve_current_cost(roster_entry, season):
     """Current-year cost for a player, resolving keep history from the database.
 
     This is the function callers normally want; current_cost() is the pure
-    arithmetic underneath it.
+    arithmetic underneath it. For more than a handful of players use
+    current_costs() instead -- this one costs two queries each.
     """
     keeps = times_kept_before(roster_entry.player, season)
     base_entry = chain_start_entry(roster_entry.player, season, keeps) or roster_entry
     return current_cost(base_entry, keeps)
+
+
+def current_costs(roster_entries, season):
+    """Bulk resolve_current_cost: {roster_entry.pk: CostResult}.
+
+    Same answers as calling resolve_current_cost() in a loop, but in a fixed
+    number of queries rather than two per player. The draft board prices every
+    eligible player on all ten rosters at once, which is ~160 players -- the
+    loop version would be several hundred queries per page load.
+    """
+    from .models import KeeperSelection, RosterEntry
+
+    entries = list(roster_entries)
+    if not entries:
+        return {}
+
+    player_ids = {e.player_id for e in entries}
+
+    # Query 1: every prior keep for these players, in one go.
+    kept_years = {}
+    rows = (
+        KeeperSelection.objects
+        .filter(roster_entry__player_id__in=player_ids, season__year__lt=season.year)
+        .values_list('roster_entry__player_id', 'season__year')
+    )
+    for player_id, year in rows:
+        kept_years.setdefault(player_id, set()).add(year)
+
+    # Same consecutive-chain walk as times_kept_before(), done in memory.
+    keeps = {}
+    for player_id in player_ids:
+        years = kept_years.get(player_id, ())
+        count = 0
+        year = season.year - 1
+        while year in years:
+            count += 1
+            year -= 1
+        keeps[player_id] = count
+
+    # Query 2: the chain-start entries, but only for players with a keep chain.
+    wanted = {pid: season.year - n - 1 for pid, n in keeps.items() if n}
+    base_entries = {}
+    if wanted:
+        candidates = (
+            RosterEntry.objects
+            .filter(player_id__in=wanted.keys(), season__year__in=set(wanted.values()))
+            .select_related('season')
+        )
+        for candidate in candidates:
+            if wanted.get(candidate.player_id) == candidate.season.year:
+                base_entries[candidate.player_id] = candidate
+
+    return {
+        entry.pk: current_cost(
+            base_entries.get(entry.player_id, entry), keeps[entry.player_id]
+        )
+        for entry in entries
+    }
 
 
 # --- Draft order ------------------------------------------------------------
@@ -153,16 +212,29 @@ def snake_overall(slot, round_number, team_count):
 # --- Pick forfeiture --------------------------------------------------------
 
 
+# Why a keeper burned the pick it burned -- surfaced in the UI so a manager can
+# see the reasoning, not just the outcome.
+VIA_BASE = 'base cost'
+VIA_COLLISION = 'collision'
+VIA_MISSING = 'missing pick'
+
+
 @dataclass(frozen=True)
 class BurnAssignment:
     """One keeper's cost paid with one specific draft pick."""
 
     cost_round: int
     pick: object          # a DraftPick
-    walked: bool          # True when the missing-pick/collision rule moved it earlier
+    via: str              # VIA_BASE / VIA_COLLISION / VIA_MISSING
+    entry: object = None  # the RosterEntry this pays for, when the caller knows it
+
+    @property
+    def walked(self):
+        """True when the rules forced this earlier than the cost round."""
+        return self.via != VIA_BASE
 
     def __str__(self):
-        note = f' (walked from Round {self.cost_round})' if self.walked else ''
+        note = f' (walked from Round {self.cost_round}, {self.via})' if self.walked else ''
         return f'Round {self.pick.round} pick{note}'
 
 
@@ -241,15 +313,23 @@ def resolve_burned_picks(team, season, keeper_costs, chosen_picks=None):
     used = set()
 
     for cost in sorted(keeper_costs):
+        # Why the walk happened, decided at the cost round itself: owning picks
+        # there that are already spoken for is a collision; owning none at all
+        # is the missing-pick rule.
+        at_cost_round = by_round.get(cost, [])
+        via_if_walked = VIA_COLLISION if at_cost_round else VIA_MISSING
+
         for round_number in range(cost, EARLIEST_ROUND - 1, -1):
             available = [p for p in by_round.get(round_number, []) if p.pk not in used]
             if not available:
                 continue
             pick = _choose_pick(available, team, chosen_picks, round_number)
             used.add(pick.pk)
-            result.assignments.append(
-                BurnAssignment(cost_round=cost, pick=pick, walked=round_number != cost)
-            )
+            result.assignments.append(BurnAssignment(
+                cost_round=cost,
+                pick=pick,
+                via=VIA_BASE if round_number == cost else via_if_walked,
+            ))
             break
         else:
             result.impossible.append(cost)
@@ -290,7 +370,7 @@ def validate_keeper_set(team, season, roster_entries, chosen_picks=None):
             f'{len(entries)} keepers selected; the limit is {MAX_KEEPERS_PER_TEAM}.'
         )
 
-    payable_costs = []
+    payable = []      # (entry, cost_round) for keepers that got this far
 
     for entry in entries:
         label = entry.player.name
@@ -309,13 +389,15 @@ def validate_keeper_set(team, season, roster_entries, chosen_picks=None):
         if not cost.keepable:
             result.add_error(f'{label}: {cost.reason}')
         else:
-            payable_costs.append(cost.cost_round)
+            payable.append((entry, cost.cost_round))
 
         if entry.team_id != team.pk:
             result.warnings.append(
                 f'{label} finished {entry.season.year} on {entry.team.name}, '
                 f'not {team.name} -- confirm the offseason trade.'
             )
+
+    payable_costs = [cost_round for _, cost_round in payable]
 
     # Section 4 -- roster composition, judged on *current-year* cost.
     premium = [c for c in payable_costs if c in PREMIUM_ROUNDS]
@@ -333,7 +415,7 @@ def validate_keeper_set(team, season, roster_entries, chosen_picks=None):
 
     # Section 3 -- can the team actually pay?
     burn = resolve_burned_picks(team, season, payable_costs, chosen_picks)
-    result.burned_picks = burn.assignments
+    result.burned_picks = _attribute_assignments(burn.assignments, payable)
     for cost_round in burn.impossible:
         result.add_error(
             f'No pick owned in Round {cost_round} or any earlier round to pay '
@@ -341,6 +423,29 @@ def validate_keeper_set(team, season, roster_entries, chosen_picks=None):
         )
 
     return result
+
+
+def _attribute_assignments(assignments, payable):
+    """Tag each burn with the roster entry it pays for.
+
+    resolve_burned_picks() works in bare cost rounds so it stays easy to test,
+    so the entries are matched back here. Two keepers at the same cost round are
+    genuinely interchangeable -- either attribution is correct -- so a greedy
+    match on cost round is enough.
+    """
+    unmatched = list(payable)
+    attributed = []
+
+    for assignment in assignments:
+        for pair in unmatched:
+            if pair[1] == assignment.cost_round:
+                attributed.append(replace(assignment, entry=pair[0]))
+                unmatched.remove(pair)
+                break
+        else:
+            attributed.append(assignment)
+
+    return attributed
 
 
 # --- Applying a validated set ----------------------------------------------
@@ -377,15 +482,14 @@ def recompute_team_selections(team, season, chosen_picks=None):
         cost = result.costs.get(selection.roster_entry_id)
         selection.cost_round = cost.cost_round if cost and cost.keepable else None
 
-    # Match each burn assignment back to the selection that caused it. Costs are
-    # matched greedily; two keepers at the same cost round are interchangeable.
-    unassigned = list(selections)
+    # validate_keeper_set already tagged each burn with the entry it pays for.
+    by_entry = {s.roster_entry_id: s for s in selections}
     for assignment in result.burned_picks:
-        for selection in unassigned:
-            if selection.cost_round == assignment.cost_round:
-                selection.burned_pick = assignment.pick
-                unassigned.remove(selection)
-                break
+        if assignment.entry is None:
+            continue
+        selection = by_entry.get(assignment.entry.pk)
+        if selection is not None:
+            selection.burned_pick = assignment.pick
 
     for selection in selections:
         selection.save(update_fields=['cost_round', 'burned_pick'])

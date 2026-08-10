@@ -13,6 +13,15 @@ class Season(models.Model):
 
     year = models.PositiveIntegerField(unique=True)
 
+    # Rules section 1: keepers are secret until the deadline, then the
+    # commissioner enters them and they become visible to everyone. This flag is
+    # that switch -- the board shows candidate lists before it and actual
+    # declarations after it.
+    keepers_revealed = models.BooleanField(
+        default=False,
+        help_text='Tick once all declarations are entered. Reveals keepers to the league.',
+    )
+
     class Meta:
         ordering = ['-year']
 

@@ -169,6 +169,180 @@ table.data a { color: var(--accent); font-weight: 600; }
 .prose th { background: #fbfcfd; }
 .prose blockquote { margin: 1rem 0; padding-left: 1rem; border-left: 3px solid var(--line); color: var(--muted); }
 
+/* Draft board ------------------------------------------------------------- */
+
+main.wide { max-width: 1400px; }
+
+.board-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.25rem;
+  margin: 1.25rem 0;
+}
+
+/* The grid scrolls sideways rather than reflowing: ten columns cannot usefully
+   stack on a phone, and a scrollable board keeps the snake readable. */
+.board-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--card);
+}
+
+table.board {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.8rem;
+}
+
+table.board th,
+table.board td {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 0.35rem 0.45rem;
+  vertical-align: top;
+  text-align: left;
+}
+
+table.board thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #fbfcfd;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.slot-num {
+  display: inline-block;
+  min-width: 1.4em;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+/* Sticky round column, so you never lose which round you are looking at. */
+th.round-head {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: #fbfcfd;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  min-width: 3.2rem;
+}
+
+thead th.round-head { z-index: 4; }
+.arrow { color: var(--muted); font-weight: 400; }
+
+.cell {
+  min-width: 8.5rem;
+  height: 3.1rem;
+  position: relative;
+}
+
+.own-col { background: var(--accent-soft); }
+
+.cell .badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.05em 0.35em;
+  border-radius: 3px;
+  background: #f9e6d5;
+  color: #7a4a1e;
+  margin-bottom: 0.15rem;
+}
+
+.cell .cands { margin: 0; padding: 0; list-style: none; }
+.cell .cands li { color: var(--muted); font-size: 0.74rem; line-height: 1.35; }
+.cell .cands li.pending { opacity: 0.55; }
+
+.pending-tag {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: #f4ecd6;
+  color: #6d5716;
+  padding: 0 0.25em;
+  border-radius: 2px;
+}
+
+.cell .more summary {
+  cursor: pointer;
+  font-size: 0.7rem;
+  color: var(--accent);
+}
+
+.cell.kept {
+  background: #2c3a33;
+  color: #fff;
+}
+
+.cell.kept .kept-name { font-weight: 700; font-size: 0.78rem; display: block; }
+
+/* Sandbox highlight -- added and removed by board.js. */
+.cell.burned {
+  background: #fde9c8;
+  box-shadow: inset 0 0 0 2px #c98a1e;
+}
+
+.burn-tag {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #6d4408;
+}
+
+.burn-tag em { font-weight: 400; font-style: italic; opacity: 0.75; }
+
+/* Sandbox sidebar --------------------------------------------------------- */
+
+.sandbox {
+  flex: 0 0 17rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.9rem 1rem;
+}
+
+.sandbox h2 { font-size: 1rem; margin: 0 0 0.15rem; }
+.sandbox-list { list-style: none; margin: 0.8rem 0; padding: 0; }
+.sandbox-list li { margin-bottom: 0.2rem; font-size: 0.82rem; }
+.sandbox-list li.disabled { opacity: 0.45; }
+
+.sandbox-list label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.sandbox-list input:disabled + .sandbox-name { cursor: default; }
+.sandbox-name { flex: 1 1 auto; }
+.sandbox-cost { font-weight: 700; }
+
+.sandbox-result {
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
+  font-size: 0.82rem;
+}
+
+.sandbox-result ul { margin: 0.3rem 0 0; padding-left: 1.1rem; }
+.sandbox-good { color: var(--accent); font-weight: 600; margin: 0; }
+.sandbox-bad { color: #a12a2a; font-weight: 600; margin: 0; }
+.sandbox-warn { color: #7a5b12; }
+
+@media (max-width: 800px) {
+  .board-layout { flex-direction: column; }
+  .sandbox { flex: 1 1 auto; width: 100%; }
+}
+
 /* Login ------------------------------------------------------------------- */
 
 .card {

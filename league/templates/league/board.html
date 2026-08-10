@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Draft Board{% endblock %}
+{% block main_class %}wide{% endblock %}
+
+{% block content %}
+{% if not season %}
+  <h1>Draft Board</h1>
+  <p class="error">
+    No draft season is set up yet. Run
+    <code>python manage.py seed_draft_order</code> then
+    <code>python manage.py generate_picks</code>.
+  </p>
+{% else %}
+
+<h1>{{ season.year }} Draft Board</h1>
+<p class="subtle">
+  Snake draft, {{ slots|length }} teams
+  {% if revealed %}
+    &middot; <strong>keepers revealed</strong>
+  {% else %}
+    &middot; keepers not yet revealed &mdash; cells show who each team
+    <em>could</em> keep at that round's cost
+  {% endif %}
+</p>
+
+<div class="board-layout">
+
+  {% if own_team and not revealed %}
+  <aside class="sandbox" id="sandbox"
+         data-preview-url="{% url 'keeper_preview' %}"
+         data-team-id="{{ own_team.pk }}">
+    <h2>Try a keeper set</h2>
+    <p class="subtle">{{ own_team.name }} &middot; pick up to 3</p>
+
+    {% comment %}
+      The CSRF token is rendered here purely so the JavaScript can read its
+      value and send it back as an X-CSRFToken header on the fetch() POST.
+      There is no form submit -- see board.js.
+    {% endcomment %}
+    {% csrf_token %}
+
+    <ul class="sandbox-list">
+      {% for row in sandbox_players %}
+        <li>
+          <label>
+            <input type="checkbox" class="keeper-choice"
+                   value="{{ row.entry.pk }}"
+                   data-player="{{ row.entry.player.name }}">
+            <span class="sandbox-name">{{ row.entry.player.name }}</span>
+            <span class="pos pos-{{ row.entry.player.position }}">{{ row.entry.player.position }}</span>
+            <span class="sandbox-cost">R{{ row.cost.cost_round }}</span>
+            {% if row.keeps %}<span class="subtle">kept {{ row.keeps }}x</span>{% endif %}
+          </label>
+        </li>
+      {% empty %}
+        <li class="subtle">No eligible players found for {{ roster_season.year }}.</li>
+      {% endfor %}
+    </ul>
+
+    <div id="sandbox-result" class="sandbox-result" hidden></div>
+
+    <p class="note">
+      Nothing here is saved or visible to anyone else. Declare your keepers by
+      texting the commissioner before the deadline.
+    </p>
+  </aside>
+  {% endif %}
+
+  <div class="board-scroll">
+    <table class="board">
+      <thead>
+        <tr>
+          <th class="round-head">Rd</th>
+          {% for slot in slots %}
+            <th{% if own_team and slot.team_id == own_team.pk %} class="own-col"{% endif %}>
+              <span class="slot-num">{{ slot.slot }}</span>
+              {{ slot.team.owner_name }}
+            </th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <th class="round-head" scope="row">
+              {{ row.round }}
+              <span class="arrow" title="{% if row.forward %}picks run left to right{% else %}picks run right to left{% endif %}">{% if row.forward %}&rarr;{% else %}&larr;{% endif %}</span>
+            </th>
+
+            {% for cell in row.cells %}
+              {% if not cell %}
+                <td class="cell empty"></td>
+              {% else %}
+                <td class="cell{% if cell.is_own %} own-col{% endif %}{% if cell.keeper %} kept{% endif %}{% if cell.traded_to %} traded{% endif %}"
+                    data-pick-id="{{ cell.pick.pk }}"
+                    data-round="{{ cell.pick.round }}">
+
+                  {% if cell.traded_to %}
+                    <span class="badge" title="Traded to {{ cell.traded_to.name }}">&rarr; {{ cell.traded_to.owner_name }}</span>
+                  {% endif %}
+
+                  {% if cell.keeper %}
+                    <span class="kept-name">{{ cell.keeper.roster_entry.player.name }}</span>
+                    <span class="pos pos-{{ cell.keeper.roster_entry.player.position }}">{{ cell.keeper.roster_entry.player.position }}</span>
+                  {% elif cell.candidates %}
+                    <ul class="cands">
+                      {% for entry in cell.candidates %}
+                        <li{% if entry.eligible is None %} class="pending" title="Eligibility not yet reviewed"{% endif %}>
+                          {{ entry.player.name }}{% if entry.eligible is None %} <span class="pending-tag">pending</span>{% endif %}
+                        </li>
+                      {% endfor %}
+                    </ul>
+                    {% if cell.extra_candidates %}
+                      <details class="more">
+                        <summary>+{{ cell.extra_candidates|length }} more</summary>
+                        <ul class="cands">
+                          {% for entry in cell.extra_candidates %}
+                            <li{% if entry.eligible is None %} class="pending"{% endif %}>
+                              {{ entry.player.name }}{% if entry.eligible is None %} <span class="pending-tag">pending</span>{% endif %}
+                            </li>
+                          {% endfor %}
+                        </ul>
+                      </details>
+                    {% endif %}
+                  {% endif %}
+                </td>
+              {% endif %}
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="note">
+  {% if revealed %}
+    Filled cells are declared keepers; those slots are skipped in the draft.
+  {% else %}
+    Names show players whose keeper cost lands in that round, based on last
+    season's draft. They are possibilities, not declarations &mdash; and they
+    ignore collision and missing-pick effects, which depend on a keeper set only
+    that manager knows. See the <a href="{% url 'rules' %}">rules</a>, section 3.
+  {% endif %}
+</p>
+
+{% if own_team and not revealed %}
+  <script src="{% static 'league/board.js' %}" defer></script>
+{% endif %}
+
+{% endif %}
+{% endblock %}

@@ -17,7 +17,8 @@ from .models import (
 
 @admin.register(Season)
 class SeasonAdmin(admin.ModelAdmin):
-    list_display = ['year']
+    list_display = ['year', 'keepers_revealed']
+    list_editable = ['keepers_revealed']
     search_fields = ['year']
 
 
