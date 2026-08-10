@@ -1,3 +1,6 @@
+# Development environment: everything needed to work on the project locally,
+# including the notebook/pandas pipeline that produced data/processed.
+# The container installs requirements-prod.txt instead -- see the note there.
 pandas
 numpy
 openpyxl
@@ -7,3 +10,4 @@ jupyterlab
 markdown
 python-dotenv
 requests
+whitenoise

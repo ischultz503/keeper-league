@@ -11,8 +11,10 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -42,25 +44,76 @@ FANTASYPROS_API_KEY = (
 )
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
+def env_list(name):
+    """A comma-separated environment variable as a list of clean strings."""
+    return [
+        value.strip()
+        for value in os.environ.get(name, '').split(',')
+        if value.strip()
+    ]
 
-# SECURITY WARNING: keep the secret key used in production secret!
-# The literal below is the development fallback only. Set DJANGO_SECRET_KEY in
-# .env (and in the container environment) before deploying.
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'django-insecure-%0q30mmnz3#%*nd&eg-y3+f&u6ldzsm=w_pgzhjs&3vle3t!-c',
-)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = env_flag('DJANGO_DEBUG', default=True)
+#
+# The default is now False -- "forgot to set it" must fail closed. Local
+# development turns it on explicitly with DJANGO_DEBUG=true in .env.
+DEBUG = env_flag('DJANGO_DEBUG', default=False)
 
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.environ.get('DJANGO_ALLOWED_HOSTS', '').split(',')
-    if host.strip()
-]
+# `manage.py test` forces DEBUG off, so from inside this file a test run looks
+# exactly like production. Spotting it here is what lets a fresh clone run the
+# suite with no .env at all. (The tidier answer is a separate settings module
+# for tests; for a ten-user project, one flag is proportionate.)
+RUNNING_TESTS = 'test' in sys.argv
+
+# SECURITY WARNING: keep the secret key used in production secret!
+#
+# In production it MUST come from the environment; there is no fallback,
+# because a fallback is how a committed placeholder ends up signing real
+# sessions. Debug and test runs get a throwaway generated per process -- fine
+# locally (it only invalidates your own session on restart) and impossible to
+# leak. Serving with one would be a real bug, though: each gunicorn worker
+# would generate its own, so logins would fail at random. Hence the raise.
+if os.environ.get('DJANGO_SECRET_KEY'):
+    SECRET_KEY = os.environ['DJANGO_SECRET_KEY']
+elif DEBUG or RUNNING_TESTS:
+    from django.core.management.utils import get_random_secret_key
+
+    SECRET_KEY = get_random_secret_key()
+else:
+    raise ImproperlyConfigured(
+        'DJANGO_SECRET_KEY is not set. Generate one with:\n'
+        '  python -c "from django.core.management.utils import '
+        'get_random_secret_key; print(get_random_secret_key())"'
+    )
+
+# Which Host: headers this site answers to. Django rejects anything else, which
+# is what stops host-header poisoning; in the container it is the real domain.
+ALLOWED_HOSTS = env_list('DJANGO_ALLOWED_HOSTS')
+if not ALLOWED_HOSTS and DEBUG:
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]']
+
+# Django 4+ checks the Origin header on unsafe requests against this list, and
+# an https:// origin never matches by accident -- so behind Caddy the real
+# domain has to be named here or every POST fails CSRF.
+CSRF_TRUSTED_ORIGINS = env_list('DJANGO_CSRF_TRUSTED_ORIGINS')
+
+# Production hardening. Tests are excluded as well as debug runs: the test
+# client speaks plain http, so SECURE_SSL_REDIRECT would turn every request in
+# the suite into a 301 and no view would ever run.
+if not (DEBUG or RUNNING_TESTS):
+    # Caddy terminates TLS and proxies plain HTTP to gunicorn, so Django sees
+    # an http:// request and would otherwise redirect https traffic forever.
+    # This header is only trustworthy because nothing but Caddy can reach the
+    # app container -- gunicorn is not published to the host.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    # Start HSTS short. Once the domain is known good, raise it -- browsers
+    # honour the longest value they have seen, so a long max-age is hard to
+    # walk back if the certificate ever breaks.
+    SECURE_HSTS_SECONDS = 3600
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
 
 
 # Application definition
@@ -77,6 +130,12 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # Whitenoise serves the collected static files straight from gunicorn.
+    # It sits immediately after SecurityMiddleware and before everything else,
+    # so a request for a CSS file is answered and returned without paying for
+    # sessions, auth or CSRF. See the STORAGES note further down for why we do
+    # not run a second web server just to hand out two files.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -108,10 +167,14 @@ WSGI_APPLICATION = 'keeper_site.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+# The path is an environment variable so the container can point Django at a
+# bind-mounted directory without changing any code. A database inside the image
+# would be destroyed by every rebuild; this way the file lives on the host and
+# the container is disposable, which is the whole point of a container.
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': os.environ.get('DJANGO_DB_PATH') or BASE_DIR / 'db.sqlite3',
     }
 }
 
@@ -151,7 +214,44 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+
+# Where our hand-written CSS and JS live (source).
 STATICFILES_DIRS = [BASE_DIR / 'static']
+
+# Where `collectstatic` gathers everything -- ours plus the admin's -- for
+# whitenoise to serve. gunicorn is a WSGI server and serves no files at all, so
+# without whitenoise this stack would need a second web server whose only job
+# is two files. On a ten-user site that is not a trade worth making.
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# Manifest storage renames every file to include a hash of its contents
+# (board.4f2a1c.js), so it can be cached forever and a deploy busts the cache
+# by changing the name. The catch: {% static %} then resolves through a
+# manifest that only exists after collectstatic has run, so a fresh clone or a
+# test run would blow up on a missing manifest. The image runs collectstatic at
+# build time and sets this flag; local dev leaves it off and gets plain names.
+STATIC_MANIFEST = env_flag('DJANGO_STATIC_MANIFEST', default=False)
+
+if DEBUG or RUNNING_TESTS:
+    # Off the server, serve straight out of the source directories through the
+    # static finders. A fresh clone can then run the site and the suite without
+    # collectstatic having ever been run, and edited CSS shows up on reload.
+    # The image always collects, so this never applies in production.
+    WHITENOISE_USE_FINDERS = True
+    WHITENOISE_AUTOREFRESH = True
+
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': (
+            'whitenoise.storage.CompressedManifestStaticFilesStorage'
+            if STATIC_MANIFEST
+            else 'whitenoise.storage.CompressedStaticFilesStorage'
+        ),
+    },
+}
 
 
 # Authentication redirects

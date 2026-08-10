@@ -1,0 +1,44 @@
+# What NOT to send to the Docker daemon when building.
+#
+# Everything not listed here is copied into the build context and then into the
+# image by `COPY . .`. Three reasons to be strict: build speed, image size, and
+# above all secrecy -- .env and the SSH key must never end up in a layer, and a
+# layer cannot be un-published once the image is pushed anywhere.
+
+# Secrets and keys. Never, under any circumstances.
+.env
+.env.*
+*.pem
+
+# The live database. It belongs on the host, bind-mounted in, so that rebuilding
+# the image cannot destroy the league's data.
+db.sqlite3
+db.sqlite3-journal
+db/
+
+# Local virtualenv: Windows binaries, useless and large in a Linux image.
+.venv/
+
+# Build artefacts and caches -- collectstatic runs inside the build.
+staticfiles/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# History and tooling the running site has no use for.
+.git/
+.gitignore
+.gitattributes
+.vscode/
+.idea/
+
+# Source data and analysis. The importers that read these run locally; the
+# tidy CSVs in data/processed are small and stay, so an import can be re-run
+# on the server if it ever needs to be.
+data/raw/
+notebooks/
+src/
+
+# The rules doc is READ AT REQUEST TIME by the rules view, so docs/ must stay
+# in the image. Do not add it here.

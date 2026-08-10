@@ -12,3 +12,13 @@ __pycache__/
 db.sqlite3
 db.sqlite3-journal
 /staticfiles/
+
+# The live database's host directory on the server (bind-mounted into the
+# container). Never the league's data in git.
+/db/
+
+# SSH keys.
+*.pem
+
+# Real environment file only -- .env.example is tracked on purpose.
+!.env.example

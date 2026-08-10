@@ -1,0 +1,23 @@
+# Runtime dependencies for the container. Deliberately NOT requirements.txt.
+#
+# requirements.txt is the development environment: it carries pandas, numpy,
+# openpyxl, jupyterlab and ipykernel, which exist for the notebook pipeline and
+# the spreadsheet importers. None of that serves a single web request, and
+# putting it in the image would add hundreds of megabytes and a great deal of
+# code we would then be responsible for patching. The container installs only
+# what answering a request actually needs.
+#
+# The consequence, documented in docs/deploy_notes.md: `import_rosters` does not
+# run inside the container (it reads .xlsx through pandas). Roster imports
+# happen locally, and the resulting db.sqlite3 is copied to the server.
+#
+# Versions are pinned here and not in requirements.txt on purpose. A rebuild
+# six months from now must produce the same image as today; a development
+# machine can afford to float and find out early when something breaks.
+
+Django==6.0.7
+gunicorn==26.0.0
+whitenoise==6.12.0
+python-dotenv==1.2.2
+Markdown==3.10.3
+requests==2.34.2

@@ -1,0 +1,34 @@
+# Caddy config. Short because Caddy does the hard part by default: given a real
+# domain name, it obtains a Let's Encrypt certificate on first request, renews
+# it, and redirects http to https. There is no certbot step and no cron job.
+
+{
+	# Where Let's Encrypt sends expiry warnings if renewal ever stops working.
+	# Set ACME_EMAIL in .env.
+	email {$ACME_EMAIL}
+}
+
+# {$DOMAIN} is read from the environment (docker-compose passes .env through),
+# so this file is identical on every deployment and the domain is configuration.
+# The name must resolve to this server's Elastic IP before the first request,
+# or the certificate challenge fails.
+{$DOMAIN} {
+	# Compress responses. The board is a large HTML table and gzips very well.
+	encode zstd gzip
+
+	# "web" is the compose service name, resolved on the private network. This
+	# is the only route into the application, and the application is not
+	# reachable any other way -- gunicorn's port is never published to the host.
+	reverse_proxy web:8000 {
+		# Caddy sets X-Forwarded-Proto: https here, which is what lets Django
+		# know the original request was secure even though this hop is plain
+		# HTTP. settings.SECURE_PROXY_SSL_HEADER reads exactly that header;
+		# without the pair, Django would redirect https traffic to https
+		# forever.
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	log {
+		output stdout
+	}
+}

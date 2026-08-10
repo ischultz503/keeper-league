@@ -1,0 +1,22 @@
+# Line endings for files that end up inside a Linux container.
+#
+# This machine has core.autocrlf=true, so git rewrites LF to CRLF on checkout.
+# That is right for Windows editors and catastrophic for a shell script: Linux
+# reads the shebang line literally, so `#!/bin/sh\r` sends the kernel looking
+# for an interpreter named "sh\r", which does not exist. The container then
+# fails with "exec format error" or "no such file or directory" -- naming a file
+# that is visibly right there. It is the classic Windows-authored-container bug
+# and it costs people hours.
+#
+# `eol=lf` overrides autocrlf for these paths: LF in the repository, LF in the
+# working tree, LF in the image.
+#
+# Scoped to container files rather than set repo-wide (`* text=auto`), which
+# would renormalise every existing file and bury the next real diff.
+
+*.sh            text eol=lf
+docker/**       text eol=lf
+Dockerfile      text eol=lf
+.dockerignore   text eol=lf
+Caddyfile       text eol=lf
+docker-compose.yml text eol=lf
