@@ -1,11 +1,17 @@
+{% load board_names %}
 {% comment %}
   One possible keeper in a board cell. Expects `cand`, a dict from the board
   view: {entry, cost_round, placed_round, walked}. Included from board.html for
   both the visible three and the "+N more" list.
+
+  Grid cell, so the name is abbreviated ("J. Chase"). The row's tooltip opens
+  with the full name, ahead of whatever else it has to say -- there is one
+  tooltip per row, and "who is this" comes before "and here is the catch".
+  The popover this cell opens lists full names.
 {% endcomment %}
 <li class="cand pos-bg-{{ cand.entry.player.position }}{% if cand.entry.eligible is None %} pending{% endif %}"
-    {% if cand.walked %}title="Costs Round {{ cand.cost_round }}. {{ cand.entry.team.owner_name }} no longer owns that pick, so keeping him burns Round {{ cand.placed_round }} instead."{% elif cand.entry.eligible is None %}title="Eligibility not yet reviewed"{% endif %}>
-  <span class="cand-name">{{ cand.entry.player.name }}</span>
+    title="{{ cand.entry.player.name }}{% if cand.walked %} &mdash; costs Round {{ cand.cost_round }}. {{ cand.entry.team.owner_name }} no longer owns that pick, so keeping him burns Round {{ cand.placed_round }} instead.{% elif cand.entry.eligible is None %} &mdash; eligibility not yet reviewed{% endif %}">
+  <span class="cand-name">{{ cand.entry.player|short_name:short_names }}</span>
   {% if cand.entry.player.nfl_team %}<span class="cand-team">{{ cand.entry.player.nfl_team }}</span>{% endif %}
   {% if cand.walked %}<span class="shift-mark">R{{ cand.cost_round }}&rarr;</span>{% endif %}
   {% if cand.entry.eligible is None %}<span class="pending-tag" title="Eligibility not yet reviewed">?</span>{% endif %}

@@ -13,6 +13,7 @@ from django.views.decorators.http import require_POST
 
 from . import draft_sim
 from . import keeper_engine as engine
+from . import names
 from .models import (
     DraftPick,
     DraftSlot,
@@ -266,6 +267,20 @@ def draft_pick_label(entry, team_count):
     return f'R{entry.draft_round}, Pick {position}'
 
 
+def _grid_names():
+    """{player id: the name to print in a board cell} -- see league.names.
+
+    Priced over the WHOLE player table rather than just the cells the server is
+    about to render, for one reason: the simulator paints players into this same
+    grid from the browser, and a burned cell keeps its candidate list underneath
+    the burn tag. Two surfaces, one board -- and a player who read "J. Chase" in
+    one cell and "Ja'Marr Chase" in the next would look like two people.
+    Scoring the whole table once is a superset of anything the board can show,
+    so every cell agrees. It is one query of a few hundred narrow rows.
+    """
+    return names.short_names(Player.objects.only('id', 'name', 'position'))
+
+
 def _own_team(request):
     """The logged-in manager's team, or None.
 
@@ -441,6 +456,9 @@ def board(request):
         'rows': rows,
         'revealed': revealed,
         'own_team': own_team,
+        # Grid cells only. Every list with room to spare -- the sandbox, the
+        # popover, the mock-draft chooser -- prints full names.
+        'short_names': _grid_names(),
         'sandbox_players': _sandbox_players(own_team, roster_season, season),
         'show_all_rounds': show_all_rounds,
         'total_rounds': len(rounds),
@@ -598,6 +616,7 @@ def keeper_preview(request):
         return JsonResponse({'error': 'Those players are not on your roster.'}, status=403)
 
     result = engine.validate_keeper_set(team, season, entries)
+    short = _grid_names()
 
     return JsonResponse({
         'valid': result.valid,
@@ -612,7 +631,13 @@ def keeper_preview(request):
                 # entry_id lets the board tie a burned cell back to the exact
                 # checkbox that caused it, for the colour-matched swatches.
                 'entry_id': assignment.entry.pk if assignment.entry else None,
+                # Full name for the cell's tooltip, short one for the tag drawn
+                # in the cell -- same split as _fill_json.
                 'player': assignment.entry.player.name if assignment.entry else '',
+                'short': (
+                    short.get(assignment.entry.player_id, assignment.entry.player.name)
+                    if assignment.entry else ''
+                ),
             }
             for assignment in result.burned_picks
         ],
@@ -704,10 +729,11 @@ def simulate(request):
         return JsonResponse({'error': str(problem)}, status=400)
 
     players = {player.pk: player for player in pool}
+    short = _grid_names()
 
     response = {
         'fills': [
-            _fill_json(cell, players[cell.player_id])
+            _fill_json(cell, players[cell.player_id], short)
             for cell in run.cells if cell.player_id is not None
         ],
         'burned': sorted(burned_pick_ids),
@@ -759,6 +785,9 @@ def _pick_label(pick_id, picks, slots):
 
 
 def _player_json(player):
+    # Full name: this feeds the mock-draft chooser and its search box, both of
+    # which have room, and neither of which should make you squint at an
+    # initial before spending a pick.
     return {
         'id': player.pk,
         'name': player.name,
@@ -768,10 +797,15 @@ def _player_json(player):
     }
 
 
-def _fill_json(cell, player):
+def _fill_json(cell, player, short):
+    # `player` is the full name (titles, announcements); `short` is what goes in
+    # the grid cell. Both are computed here rather than in board.js -- the
+    # abbreviation rules and the collision check live in league.names, and the
+    # browser has no business owning a second copy of them.
     return {
         'pick_id': cell.pick_id,
         'player': player.name,
+        'short': short.get(player.pk, player.name),
         'position': player.position,
         'nfl_team': player.nfl_team,
         'source': cell.source,

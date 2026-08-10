@@ -207,9 +207,11 @@
       : burn.player + ' costs Round ' + burn.cost_round +
         ', moved here (' + burn.via + ')';
 
+    // Grid cell, so the short name goes in it. The server decides what "short"
+    // means -- see league/names.py; there is no abbreviation logic in here.
     var tag = document.createElement('span');
     tag.className = 'burn-tag';
-    tag.textContent = burn.player;
+    tag.textContent = burn.short || burn.player;
     if (burn.via !== 'base cost') {
       var via = document.createElement('em');
       via.textContent = burn.via;
@@ -359,9 +361,12 @@
     var wrap = document.createElement('span');
     wrap.className = 'sim-fill';
 
+    // Short in the cell, full in the tooltip -- the same split every
+    // server-rendered cell uses, and the same source for it.
     var name = document.createElement('span');
     name.className = 'filled-name';
-    name.textContent = fill.player;
+    name.textContent = fill.short || fill.player;
+    name.title = fill.player;
 
     var sub = document.createElement('span');
     sub.className = 'filled-sub';

@@ -553,7 +553,12 @@ th.round-head {
   vertical-align: middle;
 }
 
-thead th.round-head { z-index: 4; }
+/* The corner cell is sticky in BOTH directions, so it has to outrank the column
+   headers sliding underneath it as well as the round numbers below it.
+   Qualified with `table.board` on purpose: `thead th.round-head` alone is less
+   specific than the `table.board thead th` rule above, which would pin it back
+   to z-index 2 and let the scrolling headers paint straight over "Rd". */
+table.board thead th.round-head { z-index: 4; }
 
 .arrow {
   display: block;
@@ -567,7 +572,9 @@ thead th.round-head { z-index: 4; }
 
 .cell {
   position: relative;
-  height: 4.4rem;
+  /* Taller than the names strictly need, because a cell also has to hold three
+     candidate rows and the "+N more" line under them at the new size. */
+  height: 5.1rem;
   padding: 0.9rem 0.35rem 0.25rem;
   border-radius: 5px;
   background: var(--board-cell);
@@ -594,10 +601,13 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 .cell.filled { color: #fff; }
 .cell.filled .pick-label { color: rgba(255, 255, 255, 0.72); }
 
+/* The name is the thing you read across a board of a hundred cells, so it gets
+   the size. It can afford it because the grid prints "J. Chase" rather than
+   "Ja'Marr Chase" -- see league/names.py. */
 .filled-name {
   display: block;
   margin-top: 0.15rem;
-  font-size: 0.8rem;
+  font-size: 0.95rem;
   font-weight: 700;
   line-height: 1.15;
   white-space: nowrap;
@@ -605,12 +615,14 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
   text-overflow: ellipsis;
 }
 
+/* Position and NFL team stay deliberately small and quiet: they are how you
+   confirm a name you have already read, not what you scan for. */
 .filled-sub {
   display: block;
-  font-size: 0.64rem;
+  font-size: 0.63rem;
   font-weight: 600;
   letter-spacing: 0.03em;
-  opacity: 0.85;
+  opacity: 0.78;
 }
 
 /* Solid = fact (declared or locked). Desaturated = projection. */
@@ -684,14 +696,14 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
   padding: 0 0.25rem;
   border-radius: 2px;
   line-height: 1.35;
-  font-size: 0.66rem;
+  font-size: 0.78rem;
   color: #fff;
   white-space: nowrap;
   overflow: hidden;
 }
 
 .cand-name { overflow: hidden; text-overflow: ellipsis; }
-.cand-team { opacity: 0.7; font-size: 0.58rem; font-weight: 700; }
+.cand-team { opacity: 0.7; font-size: 0.6rem; font-weight: 700; }
 .cell .cand.pending { opacity: 0.5; }
 
 .pending-tag {
@@ -751,10 +763,12 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 }
 .cell.burned .pick-label { color: rgba(255, 255, 255, 0.8); }
 
+/* Matched to .filled-name, near enough: a burned cell is a name in the grid
+   like any other, and it reads at the same distance. */
 .burn-tag {
   display: block;
   margin-top: 0.15rem;
-  font-size: 0.7rem;
+  font-size: 0.9rem;
   font-weight: 700;
   line-height: 1.2;
   color: #fff;
@@ -765,7 +779,7 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
   display: block;
   font-weight: 400;
   font-style: normal;
-  font-size: 0.6rem;
+  font-size: 0.62rem;
   opacity: 0.85;
 }
 
@@ -866,7 +880,7 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 .more-count {
   display: block;
   padding-left: 0.25rem;
-  font-size: 0.6rem;
+  font-size: 0.66rem;
   color: #6d7883;
 }
 
@@ -1018,10 +1032,102 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 
 .sandbox .note { font-size: 0.72rem; margin: 0.6rem 0 0; }
 
+/* Narrow screens that are still made to fit ten columns ------------------- */
+
+/* The full-size type above assumes a column of about 100px, which is what a
+   1400px-plus window gives (and what the phone rules below buy back by
+   scrolling). In between, ten columns are still squeezed into whatever is
+   left after the sandbox, and a column can fall to ~60px -- there, a bigger
+   font would only move the ellipsis further left. So the type scales back to
+   just above its old size: the abbreviation still buys real characters at
+   every width, but only a wide board spends them on size as well.
+
+   Deliberately type-only. The layout here is untouched: ten columns, no
+   scrolling, exactly as before. */
+@media (min-width: 701px) and (max-width: 1400px) {
+  .filled-name { font-size: 0.85rem; }
+  .burn-tag { font-size: 0.8rem; }
+  .cell .cand { font-size: 0.7rem; }
+  .cell { height: 4.7rem; }
+}
+
+/* Only shown on a phone, where the board no longer fits and swiping it
+   sideways is not obvious from a grid whose left column never moves. */
+.board-hint { display: none; }
+
 @media (max-width: 860px) {
   .board-layout { flex-direction: column; }
   .sandbox { flex: 1 1 auto; width: 100%; position: static; }
   .board-scroll { max-height: none; width: 100%; }
+}
+
+/* Phones ------------------------------------------------------------------ */
+
+/* Ten columns cannot fit across a phone at any size worth reading, so stop
+   trying: give the columns a real minimum width and let the board scroll
+   sideways under a pinned round column. Desktop is untouched -- all ten columns
+   still fit there, with no scrolling. */
+@media (max-width: 700px) {
+  main.wide { padding-left: 0.6rem; padding-right: 0.6rem; }
+
+  .board-hint {
+    display: block;
+    margin: 0.8rem 0 -0.4rem;
+    font-size: 0.78rem;
+    color: var(--muted);
+  }
+
+  /* min-width, not width: the table still fills a wider phone. The ten is the
+     league's ten teams, which the whole app treats as fixed.
+
+     7.6rem a column is set by the widest thing a cell has to hold: a candidate
+     row is name + NFL team side by side, and anything narrower truncates
+     "A. St. Brown" to "A. St. Br...". Three-and-a-bit phone screens of board is
+     the price, and scrolling a board you can read beats seeing all of one you
+     cannot. */
+  table.board {
+    min-width: calc(2.6rem + 10 * 7.6rem);
+    font-size: 0.8rem;
+  }
+
+  /* Which round you are looking at has to survive the sideways scroll -- with
+     it gone, a cell in the middle of the board means nothing. The shadow is
+     what shows the rest of the grid passing underneath. */
+  th.round-head {
+    width: 2.6rem;
+    font-size: 0.85rem;
+    box-shadow: 3px 0 6px rgba(0, 0, 0, 0.35);
+  }
+
+  /* Room for a bigger name and a comfortable tap. */
+  .cell { height: 5.8rem; }
+  .filled-name { font-size: 1rem; }
+  .burn-tag { font-size: 0.95rem; }
+  .cell .cand { font-size: 0.82rem; line-height: 1.45; }
+
+  /* Every one of these is a finger target on this screen, and the desktop
+     sizes are all well under the ~44px a thumb needs. */
+  .pop-menu { min-width: 15rem; padding: 0.3rem; }
+
+  .pop-item {
+    min-height: 2.75rem;
+    padding: 0.5rem 0.45rem;
+    font-size: 0.85rem;
+  }
+
+  .pop-pos { font-size: 0.7rem; }
+  .pop-name { font-size: 0.85rem; }
+
+  .pick-row { min-height: 2.75rem; padding: 0.6rem 0.5rem; }
+  .pick-name { font-size: 0.92rem; }
+
+  .chip { min-height: 2.1rem; padding: 0.35rem 0.7rem; font-size: 0.78rem; }
+  .board-btn { min-height: 2.75rem; padding: 0.5rem 1rem; font-size: 0.88rem; }
+  .modal-close { min-width: 2.75rem; min-height: 2.75rem; }
+
+  /* The sandbox tick is the smallest target on the page by some way. */
+  .sandbox-list label { padding: 0.55rem 0.3rem; }
+  .sandbox-list input[type="checkbox"] { width: 1.15rem; height: 1.15rem; }
 }
 
 

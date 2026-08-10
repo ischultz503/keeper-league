@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% load static %}
+{% load board_names %}
 
 {% block title %}Draft Board{% endblock %}
 {% block main_class %}wide{% endblock %}
@@ -76,6 +77,13 @@
 </div>
 
 <p class="sim-error" id="sim-error" hidden></p>
+
+{% comment %}
+  Hidden by CSS above 700px, where all ten columns fit and there is nothing to
+  scroll. On a phone the round column stays pinned while the rest slides, which
+  makes it easy to miss that the rest slides at all.
+{% endcomment %}
+<p class="board-hint">Swipe the board sideways for the other teams &mdash; the round numbers stay put.</p>
 
 <div class="board-layout">
 
@@ -173,7 +181,11 @@
                       <span class="pick-label">{{ cell.label }}</span>
                       {% if cell.traded_to %}<span class="badge" title="Traded to {{ cell.traded_to.name }}">&rarr; {{ cell.traded_to.owner_name }}</span>{% endif %}
                       {% if cell.called %}<span class="called-tick" title="You predicted this one">&#10003;</span>{% endif %}
-                      <span class="filled-name">{{ player.name }}</span>
+                      {% comment %}
+                        Abbreviated for the grid ("J. Chase"), with the full name
+                        on hover. Every list off the grid keeps the full name.
+                      {% endcomment %}
+                      <span class="filled-name" title="{{ player.name }}">{{ player|short_name:short_names }}</span>
                       <span class="filled-sub">{{ player.position }}{% if player.nfl_team %} &ndash; {{ player.nfl_team }}{% endif %}</span>
                     </td>
                   {% endwith %}
@@ -185,7 +197,7 @@
                       <details class="cell-pop">
                         <summary>
                           <span class="pick-label">{{ cell.label }}</span>
-                          <span class="filled-name">{{ player.name }}</span>
+                          <span class="filled-name" title="{{ player.name }}">{{ player|short_name:short_names }}</span>
                           <span class="filled-sub">{{ player.position }}{% if player.nfl_team %} &ndash; {{ player.nfl_team }}{% endif %}{% if cell.prediction.via != 'base cost' %} &middot; {{ cell.prediction.via }}{% endif %}</span>
                         </summary>
                         <form class="pop-menu" method="post" action="{% url 'toggle_prediction' %}">

@@ -25,6 +25,7 @@ from django.urls import reverse
 from . import adp
 from . import draft_sim
 from . import keeper_engine as engine
+from . import names
 from . import views
 from .models import (
     DraftPick,
@@ -964,6 +965,104 @@ class NameNormalizationTests(SimpleTestCase):
         self.assertEqual(adp.normalize_position('wr'), 'WR')
 
 
+class NameAbbreviationTests(SimpleTestCase):
+    """league/names.py -- the short names the board grid prints.
+
+    Separate from NameNormalizationTests above, which is about MATCHING two
+    spellings of one player. This is about DISPLAY, and the two pull in opposite
+    directions: normalization throws suffixes away, abbreviation keeps them.
+    """
+
+    def test_a_plain_name_keeps_only_the_first_initial(self):
+        self.assertEqual(names.abbreviate("Ja'Marr Chase", 'WR'), 'J. Chase')
+        self.assertEqual(names.abbreviate('Bijan Robinson', 'RB'), 'B. Robinson')
+
+    def test_a_generational_suffix_survives(self):
+        """It is part of how the player is named, and dropping it would make
+        two relatives at the same position read identically."""
+        self.assertEqual(names.abbreviate('Travis Etienne Jr.', 'RB'), 'T. Etienne Jr.')
+        self.assertEqual(names.abbreviate('Kenneth Walker III', 'RB'), 'K. Walker III')
+
+    def test_a_multi_part_surname_keeps_every_part(self):
+        self.assertEqual(names.abbreviate('Amon-Ra St. Brown', 'WR'), 'A. St. Brown')
+        self.assertEqual(names.abbreviate('Jaxon Smith-Njigba', 'WR'), 'J. Smith-Njigba')
+
+    def test_a_first_name_that_is_already_initials_is_left_alone(self):
+        """"A. Brown" would throw away the half of "A.J." that people use."""
+        self.assertEqual(names.abbreviate('A.J. Brown', 'WR'), 'A.J. Brown')
+        self.assertEqual(names.abbreviate('T.J. Hockenson', 'TE'), 'T.J. Hockenson')
+
+    def test_a_defense_is_never_abbreviated(self):
+        """Its "first name" is a city, so the rule would mangle it -- and our
+        data spells defenses both ways."""
+        self.assertEqual(names.abbreviate('Eagles', 'DEF'), 'Eagles')
+        self.assertEqual(names.abbreviate('Green Bay Packers', 'DEF'), 'Green Bay Packers')
+        self.assertEqual(names.abbreviate('Arizona Cardinals', 'DEF'), 'Arizona Cardinals')
+
+    def test_a_one_word_name_is_left_alone(self):
+        self.assertEqual(names.abbreviate('Cher', 'WR'), 'Cher')
+
+    def test_missing_and_padded_names_do_not_crash(self):
+        self.assertEqual(names.abbreviate('', 'WR'), '')
+        self.assertEqual(names.abbreviate(None, 'WR'), '')
+        self.assertEqual(names.abbreviate('  Justin  Jefferson ', 'WR'), 'J. Jefferson')
+
+    # --- collisions ---
+
+    def player(self, pk, name, position):
+        return SimpleNamespace(pk=pk, name=name, position=position)
+
+    def test_names_that_do_not_clash_are_abbreviated(self):
+        mapping = names.short_names([
+            self.player(1, 'Tee Higgins', 'WR'),
+            self.player(2, 'Jayden Higgins', 'WR'),
+        ])
+        self.assertEqual(mapping, {1: 'T. Higgins', 2: 'J. Higgins'})
+
+    def test_two_players_who_shorten_alike_both_keep_their_full_names(self):
+        """A cell that could mean either player is worse than a long one."""
+        mapping = names.short_names([
+            self.player(1, 'Jayden Higgins', 'WR'),
+            self.player(2, 'Jerry Higgins', 'WR'),
+        ])
+        self.assertEqual(mapping, {1: 'Jayden Higgins', 2: 'Jerry Higgins'})
+
+    def test_a_clash_does_not_lengthen_anybody_else(self):
+        mapping = names.short_names([
+            self.player(1, 'Jayden Higgins', 'WR'),
+            self.player(2, 'Jerry Higgins', 'WR'),
+            self.player(3, 'Tee Higgins', 'WR'),
+        ])
+        self.assertEqual(mapping[3], 'T. Higgins')
+
+    def test_the_same_short_name_at_different_positions_is_not_a_clash(self):
+        """The cell prints the position under the name, so these are already
+        told apart -- and both are real players today."""
+        mapping = names.short_names([
+            self.player(1, 'Kyle Williams', 'WR'),
+            self.player(2, 'Kyren Williams', 'RB'),
+        ])
+        self.assertEqual(mapping, {1: 'K. Williams', 2: 'K. Williams'})
+
+    def test_one_player_listed_twice_is_not_a_clash(self):
+        """Distinct rows, one human: the board should still abbreviate him."""
+        mapping = names.short_names([
+            self.player(1, 'Justin Jefferson', 'WR'),
+            self.player(2, 'Justin Jefferson', 'WR'),
+        ])
+        self.assertEqual(mapping, {1: 'J. Jefferson', 2: 'J. Jefferson'})
+
+    def test_defenses_pass_through_the_map_unchanged(self):
+        mapping = names.short_names([
+            self.player(1, 'Eagles', 'DEF'),
+            self.player(2, 'Green Bay Packers', 'DEF'),
+        ])
+        self.assertEqual(mapping, {1: 'Eagles', 2: 'Green Bay Packers'})
+
+    def test_an_empty_board_gives_an_empty_map(self):
+        self.assertEqual(names.short_names([]), {})
+
+
 class PlayerMatchingTests(TestCase):
 
     def setUp(self):
@@ -1838,6 +1937,44 @@ class BoardViewTests(TestCase):
         self.assertIn('Jaxon Smith-Njigba', self.names_in(response, 4, self.marcus))
         self.assertContains(response, 'Jaxon Smith-Njigba')
 
+    # --- names in the grid vs names in the lists ---
+
+    def test_the_grid_abbreviates_a_candidate_but_the_popover_does_not(self):
+        """Density where it is scarce, clarity where a wrong click costs you."""
+        make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        html = self.client.get(reverse('board')).content.decode()
+
+        self.assertIn('<span class="cand-name">J. Smith-Njigba</span>', html)
+        self.assertIn('<span class="pop-name">Jaxon Smith-Njigba</span>', html)
+
+    def test_the_sandbox_sidebar_keeps_full_names(self):
+        make_entry(self.roster_season, self.isaac, 'Jaxon Smith-Njigba', 4)
+        html = self.client.get(reverse('board')).content.decode()
+
+        self.assertIn('<span class="sandbox-name">Jaxon Smith-Njigba</span>', html)
+
+    def test_a_defense_in_the_grid_is_not_abbreviated(self):
+        make_entry(self.roster_season, self.marcus, 'Eagles', 4, position='DEF')
+        html = self.client.get(reverse('board')).content.decode()
+
+        self.assertIn('<span class="cand-name">Eagles</span>', html)
+
+    def test_two_players_who_would_collide_keep_their_full_names_in_the_grid(self):
+        make_entry(self.roster_season, self.marcus, 'Jayden Higgins', 4)
+        make_entry(self.roster_season, self.teams['Nick'], 'Jerry Higgins', 4)
+        html = self.client.get(reverse('board')).content.decode()
+
+        self.assertIn('<span class="cand-name">Jayden Higgins</span>', html)
+        self.assertIn('<span class="cand-name">Jerry Higgins</span>', html)
+        self.assertNotIn('J. Higgins', html)
+
+    def test_a_grid_name_carries_the_full_name_as_a_tooltip(self):
+        """The abbreviation is never the only place the name exists."""
+        make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        html = self.client.get(reverse('board')).content.decode()
+
+        self.assertIn('title="Jaxon Smith-Njigba"', html)
+
     def test_a_candidate_lands_where_the_missing_pick_rule_puts_him(self):
         """Regression: candidates used to be placed at their base cost round,
         even when the team no longer owned a pick there. Marcus traded his R4
@@ -2360,8 +2497,12 @@ class KeeperPreviewApiTests(TestCase):
         self.assertEqual(set(data), {'valid', 'errors', 'warnings', 'burned'})
         self.assertEqual(
             set(data['burned'][0]),
-            {'pick_id', 'round', 'cost_round', 'via', 'entry_id', 'player'},
+            {'pick_id', 'round', 'cost_round', 'via', 'entry_id', 'player', 'short'},
         )
+        # The grid gets the short name, the tooltip the full one. Both are
+        # decided here, not in board.js.
+        self.assertEqual(data['burned'][0]['player'], 'Rashee Rice')
+        self.assertEqual(data['burned'][0]['short'], 'R. Rice')
 
     def test_the_endpoint_never_writes(self):
         """It is a sandbox: declarations happen by text, not here."""
@@ -2679,8 +2820,12 @@ class SimulateApiTests(TestCase):
         self.assertEqual(set(data), {'fills', 'burned', 'done', 'your_pick'})
         self.assertEqual(
             set(data['fills'][0]),
-            {'pick_id', 'player', 'position', 'nfl_team', 'source'},
+            {'pick_id', 'player', 'short', 'position', 'nfl_team', 'source'},
         )
+        # A projected cell is a grid cell, so it abbreviates like every other
+        # one -- and by the same server-side rule.
+        first = data['fills'][0]
+        self.assertEqual(first['short'], names.abbreviate(first['player'], first['position']))
         # Full auto never pauses, so the pool is not shipped.
         self.assertTrue(data['done'])
         self.assertIsNone(data['your_pick'])
