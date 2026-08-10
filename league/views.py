@@ -11,6 +11,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
 from django.views.decorators.http import require_POST
 
+from . import draft_sim
 from . import keeper_engine as engine
 from .keeper_engine import resolve_current_cost, times_kept_before
 from .models import (
@@ -18,6 +19,7 @@ from .models import (
     DraftSlot,
     KeeperPrediction,
     KeeperSelection,
+    Player,
     RosterEntry,
     Season,
     Team,
@@ -467,6 +469,151 @@ def keeper_preview(request):
             for assignment in result.burned_picks
         ],
     })
+
+
+@login_required
+@require_POST
+def simulate(request):
+    """Project the rest of the draft from ADP, for this user only.
+
+    POST-only, and the sandbox selection travels in the body. That is a
+    deliberate choice, not a style preference: the sandbox IS the manager's real
+    keeper plan, and the whole design keeps it out of the database (rules
+    section 1). A GET like ?sandbox=12,45 would write that same plan into
+    browser history, the Referer header of every outbound link, and gunicorn's
+    access log in plaintext -- strictly worse than the database row we went out
+    of our way not to write, because nobody thinks to guard a log file.
+
+    Like keeper_preview, this view never writes anything.
+    """
+    team = _own_team(request)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        entry_ids = [int(value) for value in payload.get('entry_ids', [])]
+    except (ValueError, TypeError, AttributeError):
+        return JsonResponse({'error': 'Malformed request.'}, status=400)
+
+    if len(entry_ids) > engine.MAX_KEEPERS_PER_TEAM:
+        return JsonResponse(
+            {'error': f'Pick at most {engine.MAX_KEEPERS_PER_TEAM} keepers.'}, status=400
+        )
+
+    # A commissioner account with no team of its own can still simulate -- it
+    # just has no sandbox to contribute.
+    if team is None and entry_ids:
+        return JsonResponse({'error': 'No team is linked to your login.'}, status=403)
+
+    season = keeper_season()
+    roster_season = latest_roster_season()
+    if season is None or roster_season is None:
+        return JsonResponse({'error': 'No draft season is set up yet.'}, status=409)
+
+    entries = []
+    if entry_ids:
+        entries = list(
+            RosterEntry.objects
+            .filter(pk__in=entry_ids, team=team, season=roster_season)
+            .select_related('player', 'team', 'season')
+        )
+        # Same rule as keeper_preview: the ids are filtered to this manager's
+        # own roster, and a short count is refused rather than quietly dropped.
+        if len(entries) != len(set(entry_ids)):
+            return JsonResponse({'error': 'Those players are not on your roster.'}, status=403)
+
+    burned_pick_ids, taken_player_ids, roster_positions = _keeper_state(
+        request.user, team, season, entries
+    )
+
+    slots = list(DraftSlot.objects.filter(season=season).select_related('team'))
+    picks = list(DraftPick.objects.filter(season=season))
+    pool = list(Player.objects.exclude(pk__in=taken_player_ids))
+
+    fills = draft_sim.simulate_draft(
+        slots=slots,
+        picks=picks,
+        pool=pool,
+        burned_pick_ids=burned_pick_ids,
+        roster_positions=roster_positions,
+    )
+
+    players = {player.pk: player for player in pool}
+
+    return JsonResponse({
+        'fills': [
+            {
+                'pick_id': cell.pick_id,
+                'player': players[cell.player_id].name,
+                'position': players[cell.player_id].position,
+                'nfl_team': players[cell.player_id].nfl_team,
+                'source': cell.source,
+            }
+            for cell in fills if cell.player_id is not None
+        ],
+        'burned': sorted(burned_pick_ids),
+    })
+
+
+def _keeper_state(user, team, season, sandbox_entries):
+    """Everything the simulator needs to know about who is already spoken for.
+
+    Returns (burned pick ids, player ids that must not be drafted, and the
+    positions each team already holds). Three sources feed it, and which ones
+    apply depends on the reveal:
+
+      * the user's own sandbox selection -- page state, never stored;
+      * the user's private predictions about rivals -- theirs alone;
+      * real declarations, but ONLY once keepers are revealed.
+
+    That last exclusion is the important one. DraftPick.forfeited flips as soon
+    as the commissioner enters a declaration, days before the reveal. Feeding
+    those forfeitures to the simulator would show every manager exactly which
+    slots had already been paid for, which is the leak rules section 1 exists to
+    prevent -- the same reason the board's candidate placement ignores
+    forfeitures (see _solo_burn_targets_by_team).
+    """
+    burned, taken, positions = set(), set(), {}
+
+    def record(team_id, entry):
+        taken.add(entry.player_id)
+        positions.setdefault(team_id, set()).add(entry.player.position)
+
+    if season.keepers_revealed:
+        selections = (
+            KeeperSelection.objects
+            .filter(season=season)
+            .select_related('roster_entry__player')
+        )
+        for selection in selections:
+            record(selection.team_id, selection.roster_entry)
+            if selection.burned_pick_id:
+                burned.add(selection.burned_pick_id)
+    else:
+        # Burns come from the same engine pass the board uses, so a cell the
+        # board shows as locked is a cell the simulator treats as gone.
+        predicted_by_pick, _, _ = _place_predictions(user, season, False)
+        burned.update(predicted_by_pick)
+
+        # The players are read separately rather than off those assignments: a
+        # prediction the engine could not pay for burns nothing, but the player
+        # is still predicted kept and must not turn up in someone's projection.
+        # Filtered to this user; nothing here crosses accounts.
+        predictions = (
+            KeeperPrediction.objects
+            .filter(user=user, season=season)
+            .select_related('roster_entry__player')
+        )
+        for prediction in predictions:
+            record(prediction.roster_entry.team_id, prediction.roster_entry)
+
+    if sandbox_entries and team is not None:
+        result = engine.validate_keeper_set(team, season, sandbox_entries)
+        for assignment in result.burned_picks:
+            burned.add(assignment.pick.pk)
+        for entry in sandbox_entries:
+            record(team.pk, entry)
+
+    return burned, taken, positions
 
 
 @login_required

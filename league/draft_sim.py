@@ -117,8 +117,12 @@ def simulate_draft(*, slots, picks, pool, burned_pick_ids=(), taken_player_ids=(
       pool                Players available to be drafted. Anything with
                           .pk, .position and .adp will do.
       burned_pick_ids     Pick ids forfeited to pay for a keeper, a locked
-                          prediction, or the user's sandbox selection. A pick
-                          already flagged `forfeited` on the model counts too.
+                          prediction, or the user's sandbox selection. This is
+                          the *only* thing that kills a cell -- `DraftPick.
+                          forfeited` is deliberately ignored, because before the
+                          reveal that flag records declarations the league is
+                          not allowed to see yet (rules section 1). The caller
+                          decides what counts as burned; see views.simulate.
       taken_player_ids    Players who must never be projected -- everyone kept,
                           predicted or sandboxed anywhere in the league.
       roster_positions    {team_id: iterable of position strings} a team already
@@ -143,10 +147,7 @@ def simulate_draft(*, slots, picks, pool, burned_pick_ids=(), taken_player_ids=(
     # start handing out kickers in Round 7.
     final_rounds_start = rounds - LATE_ONLY_FINAL_ROUNDS + 1
 
-    # A pick the database already marks forfeited is burned whether or not the
-    # caller remembered to say so -- post-reveal that flag *is* the record of a
-    # declared keeper.
-    burned = set(burned_pick_ids) | {p.pk for p in picks if getattr(p, 'forfeited', False)}
+    burned = set(burned_pick_ids)
 
     held = {team_id: set(positions) for team_id, positions in (roster_positions or {}).items()}
 

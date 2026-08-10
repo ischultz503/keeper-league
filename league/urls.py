@@ -20,6 +20,10 @@ urlpatterns = [
     # JSON endpoint for the board's keeper sandbox. Namespaced under /api/ to
     # keep it obviously separate from the HTML pages.
     path('api/keeper-preview/', views.keeper_preview, name='keeper_preview'),
+    # The draft simulation. POST only, and the sandbox selection travels in the
+    # body -- a query string would leak the manager's keeper plan into browser
+    # history and the server's access log. See views.simulate.
+    path('board/simulate/', views.simulate, name='simulate'),
     # Predictions are a plain form POST + redirect, not JSON: the engine has to
     # re-place the whole team after every change.
     path('predictions/toggle/', views.toggle_prediction, name='toggle_prediction'),

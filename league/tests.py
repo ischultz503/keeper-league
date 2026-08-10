@@ -1387,7 +1387,14 @@ class DraftSimTests(SimpleTestCase):
         # next team, which is exactly what happens in a real draft.
         self.assertEqual(after[2].player_id, 2)
 
-    def test_a_pick_already_flagged_forfeited_counts_as_burned(self):
+    def test_the_forfeited_flag_alone_does_not_kill_a_cell(self):
+        """Only the caller's burned list matters, and that is deliberate.
+
+        DraftPick.forfeited goes true the moment the commissioner enters a
+        declaration -- before the reveal. Honouring it here would make the
+        simulator quietly announce who has already declared, which rules
+        section 1 forbids. views.simulate decides what is burned.
+        """
         slots = sim_slots(3)
         picks = sim_picks(slots, 1)
         picks[0].forfeited = True
@@ -1395,7 +1402,7 @@ class DraftSimTests(SimpleTestCase):
         result = draft_sim.simulate_draft(
             slots=slots, picks=picks, pool=self.rbs(9), rounds=1
         )
-        self.assertEqual(result[0].source, draft_sim.SOURCE_BURNED)
+        self.assertEqual(result[0].source, draft_sim.SOURCE_SIM)
 
     def test_no_second_quarterback_until_round_nine(self):
         pool = sim_players(
@@ -2084,6 +2091,209 @@ class KeeperPreviewApiTests(TestCase):
         self.assertEqual(KeeperSelection.objects.count(), 0)
         self.assertEqual(
             DraftPick.objects.filter(season=self.season, forfeited=True).count(), 0
+        )
+
+
+class SimulateApiTests(TestCase):
+    """POST /board/simulate/ -- the ADP autofill endpoint."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.roster_season = Season.objects.create(year=2025)
+        cls.season = Season.objects.create(year=2026)
+        cls.teams = make_teams()
+        make_draft(cls.season, cls.teams)
+        cls.isaac = cls.teams['Isaac']
+        cls.marcus = cls.teams['Marcus']
+
+        # A free-agent pool wide enough to fill all 160 cells, plus a clear
+        # best-player-available at the top.
+        cls.free_agents = [
+            Player.objects.create(name=f'Free Agent {n}', position='RB', adp=float(n))
+            for n in range(1, 200)
+        ]
+        # One real roster row, so latest_roster_season() has a season to find.
+        # An unkept player goes back into the draft pool, which is why he is
+        # not excluded from it here.
+        make_entry(cls.roster_season, cls.teams['Luke'], 'Rostered Guy', 5)
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+        self.client.force_login(self.user)
+
+    def simulate(self, entries=()):
+        return self.client.post(
+            reverse('simulate'),
+            data=json.dumps({'entry_ids': [e.pk for e in entries]}),
+            content_type='application/json',
+        )
+
+    def other_user(self, team):
+        user = get_user_model().objects.create_user('rival', password='test-pass-1234')
+        team.user = user
+        team.save(update_fields=['user'])
+        return user
+
+    # -- access control -----------------------------------------------------
+
+    def test_anonymous_users_are_rejected(self):
+        self.client.logout()
+        response = self.client.post(
+            reverse('simulate'), data='{}', content_type='application/json'
+        )
+        self.assertIn(response.status_code, (302, 403))
+
+    def test_get_is_not_allowed(self):
+        """The sandbox must never reach a URL, a Referer header or an access log."""
+        self.assertEqual(self.client.get(reverse('simulate')).status_code, 405)
+
+    def test_another_teams_player_in_the_sandbox_is_refused(self):
+        theirs = make_entry(self.roster_season, self.marcus, 'Their Guy', 3)
+        self.assertEqual(self.simulate([theirs]).status_code, 403)
+
+    def test_more_than_three_sandbox_players_is_rejected(self):
+        entries = [
+            make_entry(self.roster_season, self.isaac, f'Guy {n}', 3) for n in range(4)
+        ]
+        self.assertEqual(self.simulate(entries).status_code, 400)
+
+    def test_malformed_json_is_rejected_cleanly(self):
+        response = self.client.post(
+            reverse('simulate'), data='not json', content_type='application/json'
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_the_endpoint_never_writes(self):
+        entry = make_entry(self.roster_season, self.isaac, 'Rashee Rice', 8)
+        before = (KeeperSelection.objects.count(), KeeperPrediction.objects.count(),
+                  DraftPick.objects.filter(forfeited=True).count(), Player.objects.count())
+
+        self.simulate([entry])
+
+        after = (KeeperSelection.objects.count(), KeeperPrediction.objects.count(),
+                 DraftPick.objects.filter(forfeited=True).count(), Player.objects.count())
+        self.assertEqual(before, after)
+
+    # -- privacy ------------------------------------------------------------
+
+    def test_another_users_predictions_never_reach_this_simulation(self):
+        rival_pick = make_entry(self.roster_season, self.marcus, 'Predicted Guy', 3)
+        KeeperPrediction.objects.create(
+            user=self.other_user(self.teams['Chris']),
+            season=self.season,
+            roster_entry=rival_pick,
+        )
+
+        data = self.simulate().json()
+
+        # Their call burned Marcus's Round 3 and took that player off the board
+        # -- for them. Isaac's simulation must be untouched by it.
+        marcus_r3 = DraftPick.objects.get(
+            season=self.season, round=3, original_team=self.marcus
+        )
+        self.assertNotIn(marcus_r3.pk, data['burned'])
+        self.assertIn(marcus_r3.pk, [fill['pick_id'] for fill in data['fills']])
+
+    def test_my_own_predictions_do_reach_it(self):
+        rival_pick = make_entry(self.roster_season, self.marcus, 'Predicted Guy', 3)
+        KeeperPrediction.objects.create(
+            user=self.user, season=self.season, roster_entry=rival_pick
+        )
+
+        data = self.simulate().json()
+
+        marcus_r3 = DraftPick.objects.get(
+            season=self.season, round=3, original_team=self.marcus
+        )
+        self.assertIn(marcus_r3.pk, data['burned'])
+        self.assertNotIn(marcus_r3.pk, [fill['pick_id'] for fill in data['fills']])
+        self.assertNotIn('Predicted Guy', [fill['player'] for fill in data['fills']])
+
+    # -- the simulation itself ----------------------------------------------
+
+    def test_every_unburned_cell_gets_a_projection(self):
+        data = self.simulate().json()
+        self.assertEqual(len(data['fills']), 10 * ROUNDS)
+        self.assertEqual(data['burned'], [])
+
+    def test_the_first_overall_pick_takes_the_best_adp_available(self):
+        fills = {f['pick_id']: f for f in self.simulate().json()['fills']}
+        first = DraftPick.objects.get(
+            season=self.season, round=1, original_team=self.teams['Ricky']
+        )
+        self.assertEqual(fills[first.pk]['player'], 'Free Agent 1')
+
+    def test_a_sandbox_keeper_burns_its_cell_and_leaves_the_pool(self):
+        entry = make_entry(self.roster_season, self.isaac, 'Ladd McConkey', 3)
+        entry.player.adp = 0.5          # would otherwise be the 1.01
+        entry.player.save(update_fields=['adp'])
+
+        data = self.simulate([entry]).json()
+
+        isaac_r3 = DraftPick.objects.get(
+            season=self.season, round=3, original_team=self.isaac
+        )
+        self.assertEqual(data['burned'], [isaac_r3.pk])
+        self.assertNotIn(isaac_r3.pk, [fill['pick_id'] for fill in data['fills']])
+        self.assertNotIn('Ladd McConkey', [fill['player'] for fill in data['fills']])
+
+    def test_a_kept_quarterback_stops_the_projection_drafting_another(self):
+        entry = make_entry(
+            self.roster_season, self.isaac, 'Josh Allen', 3, position='QB'
+        )
+        Player.objects.create(name='Backup QB', position='QB', adp=0.1)
+
+        fills = self.simulate([entry]).json()['fills']
+        picks = {p.pk: p for p in DraftPick.objects.filter(season=self.season)}
+        isaac_early = [
+            fill for fill in fills
+            if picks[fill['pick_id']].current_team_id == self.isaac.pk
+            and picks[fill['pick_id']].round <= 8
+        ]
+
+        self.assertNotIn('QB', [fill['position'] for fill in isaac_early])
+        # ...and somebody else happily takes him first overall.
+        self.assertIn('Backup QB', [fill['player'] for fill in fills])
+
+    def test_declared_keepers_are_invisible_until_the_reveal(self):
+        """A forfeited pick before the reveal would announce the declaration."""
+        entry = make_entry(self.roster_season, self.marcus, 'Declared Guy', 3)
+        KeeperSelection.objects.create(
+            season=self.season, team=self.marcus, roster_entry=entry
+        )
+        engine.recompute_team_selections(self.marcus, self.season)
+
+        data = self.simulate().json()
+        marcus_r3 = DraftPick.objects.get(
+            season=self.season, round=3, original_team=self.marcus
+        )
+        self.assertNotIn(marcus_r3.pk, data['burned'])
+
+    def test_after_the_reveal_declared_keepers_burn_their_cells(self):
+        entry = make_entry(self.roster_season, self.marcus, 'Declared Guy', 3)
+        KeeperSelection.objects.create(
+            season=self.season, team=self.marcus, roster_entry=entry
+        )
+        engine.recompute_team_selections(self.marcus, self.season)
+        self.season.keepers_revealed = True
+        self.season.save(update_fields=['keepers_revealed'])
+
+        data = self.simulate().json()
+        marcus_r3 = DraftPick.objects.get(
+            season=self.season, round=3, original_team=self.marcus
+        )
+        self.assertIn(marcus_r3.pk, data['burned'])
+        self.assertNotIn('Declared Guy', [fill['player'] for fill in data['fills']])
+
+    def test_response_shape_matches_what_board_js_reads(self):
+        data = self.simulate().json()
+
+        self.assertEqual(set(data), {'fills', 'burned'})
+        self.assertEqual(
+            set(data['fills'][0]),
+            {'pick_id', 'player', 'position', 'nfl_team', 'source'},
         )
 
 
