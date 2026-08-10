@@ -196,17 +196,22 @@ def current_costs(roster_entries, season):
 # --- Draft order ------------------------------------------------------------
 
 
-def snake_overall(slot, round_number, team_count):
-    """Section 6. Overall pick number for a draft slot in a snake draft.
+def snake_position_in_round(slot, round_number, team_count):
+    """Section 6. Where a slot picks *within* one round of a snake draft.
 
     Odd rounds run 1..N, even rounds run back N..1, so slot 3 of 10 picks
-    3rd in round 1 and 8th in round 2.
+    3rd in round 1 and 8th in round 2. This is the "4" in a "3.4" pick label.
     """
     if round_number % 2 == 1:
-        position_in_round = slot
-    else:
-        position_in_round = team_count - slot + 1
-    return (round_number - 1) * team_count + position_in_round
+        return slot
+    return team_count - slot + 1
+
+
+def snake_overall(slot, round_number, team_count):
+    """Section 6. Overall pick number for a draft slot in a snake draft."""
+    return (round_number - 1) * team_count + snake_position_in_round(
+        slot, round_number, team_count
+    )
 
 
 # --- Pick forfeiture --------------------------------------------------------

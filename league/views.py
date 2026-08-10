@@ -15,6 +15,11 @@ from .models import DraftPick, DraftSlot, KeeperSelection, RosterEntry, Season, 
 
 RULES_PATH = Path(settings.BASE_DIR) / 'docs' / 'keeper_rules_v3.md'
 
+# Keeper costs never exceed Round 8 (rules section 2), so rounds 1-8 hold every
+# cell a keeper can burn. The later rounds only matter for trades and the full
+# draft, and are behind the "all rounds" toggle.
+DEFAULT_VISIBLE_ROUNDS = 8
+
 
 def latest_roster_season():
     """The most recent season we have roster data for (2025 today).
@@ -211,8 +216,15 @@ def board(request):
                 'walked': target.round != cost.cost_round,
             })
 
+    # Rounds 1-8 by default: that is where every keeper cost lands (rules
+    # section 2 caps the base cost at Round 8), so it is the whole planning
+    # surface, and eight rows of ten columns fits a screen without scrolling.
+    show_all_rounds = request.GET.get('rounds') == 'all'
+    visible_rounds = rounds if show_all_rounds else rounds[:DEFAULT_VISIBLE_ROUNDS]
+
+    team_count = len(slots)
     rows = []
-    for round_number in rounds:
+    for round_number in visible_rounds:
         cells = []
         for slot in slots:
             pick = pick_map.get((round_number, slot.team_id))
@@ -224,6 +236,9 @@ def board(request):
                 candidates.get((round_number, slot.team_id), []),
                 key=lambda c: (c['cost_round'], c['entry'].player.name),
             )
+            position_in_round = engine.snake_position_in_round(
+                slot.slot, round_number, team_count
+            )
             cells.append({
                 'pick': pick,
                 'team': slot.team,
@@ -232,6 +247,8 @@ def board(request):
                 'keeper': kept_by_pick.get(pick.pk),
                 'candidates': cell_candidates[:3],
                 'extra_candidates': cell_candidates[3:],
+                # "3.4" -- round 3, fourth pick of that round.
+                'label': f'{round_number}.{position_in_round}',
             })
 
         rows.append({
@@ -249,6 +266,9 @@ def board(request):
         'revealed': revealed,
         'own_team': own_team,
         'sandbox_players': _sandbox_players(own_team, roster_season, season),
+        'show_all_rounds': show_all_rounds,
+        'total_rounds': len(rounds),
+        'visible_round_count': len(visible_rounds),
     })
 
 

@@ -1088,7 +1088,33 @@ class BoardViewTests(TestCase):
 
         owners = [s.team.owner_name for s in response.context['slots']]
         self.assertEqual(owners, OWNERS)
+
+    def test_only_the_first_eight_rounds_show_by_default(self):
+        """Keeper costs never exceed Round 8, so rounds 1-8 are the whole
+        planning surface and fit a screen without scrolling."""
+        rows = self.client.get(reverse('board')).context['rows']
+
+        self.assertEqual(len(rows), 8)
+        self.assertEqual([r['round'] for r in rows], list(range(1, 9)))
+
+    def test_the_toggle_expands_to_every_round(self):
+        response = self.client.get(reverse('board'), {'rounds': 'all'})
+
         self.assertEqual(len(response.context['rows']), ROUNDS)
+        self.assertTrue(response.context['show_all_rounds'])
+
+    def test_cells_carry_a_snaked_pick_label(self):
+        """"3.4" is round 3, fourth pick of that round -- and the fourth pick
+        of an even round belongs to the far end of the board."""
+        rows = self.client.get(reverse('board')).context['rows']
+        first_round = rows[0]['cells']
+        second_round = rows[1]['cells']
+
+        # Round 1 runs left to right: column order matches pick order.
+        self.assertEqual([c['label'] for c in first_round[:3]], ['1.1', '1.2', '1.3'])
+        # Round 2 runs back the other way.
+        self.assertEqual(second_round[0]['label'], '2.10')
+        self.assertEqual(second_round[-1]['label'], '2.1')
 
     def test_rows_alternate_snake_direction(self):
         rows = self.client.get(reverse('board')).context['rows']

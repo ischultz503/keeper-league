@@ -18,6 +18,22 @@
   --burn-1-bg: #fdefd2;  --burn-1-line: #c5871c;  --burn-1-ink: #6d4408;
   --burn-2-bg: #ece5fa;  --burn-2-line: #7458bb;  --burn-2-ink: #402a75;
   --burn-3-bg: #d8eeec;  --burn-3-line: #2c8480;  --burn-3-ink: #17504d;
+
+  /* Position palette, defined once. Each position has a solid colour for
+     resolved cells and a desaturated one for projections, so "fact" and
+     "guess" differ by saturation rather than by hue. */
+  --qb:  #d94f6e;  --qb-soft:  #7c4553;
+  --rb:  #2e9e8f;  --rb-soft:  #35635d;
+  --wr:  #3d7fc1;  --wr-soft:  #3c5570;
+  --te:  #e08640;  --te-soft:  #7a5636;
+  --k:   #9a7bc8;  --k-soft:   #56496b;
+  --def: #6b7a88;  --def-soft: #464f57;
+
+  /* The board's own dark ground, distinct from the light page around it. */
+  --board-bg: #1e242b;
+  --board-line: #2b333c;
+  --board-cell: #232a32;
+  --board-ink: #8b97a4;
 }
 
 * { box-sizing: border-box; }
@@ -181,7 +197,31 @@ table.data a { color: var(--accent); font-weight: 600; }
 
 /* Draft board ------------------------------------------------------------- */
 
-main.wide { max-width: 1440px; }
+main.wide { max-width: 1500px; }
+
+.board-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.round-toggle {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.round-toggle:hover { border-color: var(--accent); }
 
 .board-layout {
   display: flex;
@@ -190,94 +230,145 @@ main.wide { max-width: 1440px; }
   margin: 1.1rem 0 1.5rem;
 }
 
-/* Ten columns cannot usefully stack on a phone, so the grid scrolls sideways
-   with the round column pinned. Both axes stick, so you never lose your place. */
+/* At the default eight rounds the grid fits without scrolling. The overflow
+   rule only bites once "all rounds" is on, or on a narrow screen. */
 .board-scroll {
   flex: 1 1 auto;
   min-width: 0;
-  max-height: 78vh;
   overflow: auto;
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--board-bg);
+  border: 1px solid var(--board-line);
   border-radius: 8px;
+  padding: 2px;
 }
 
 table.board {
   border-collapse: separate;
-  border-spacing: 0;
-  font-size: 0.78rem;
+  border-spacing: 2px;
   width: 100%;
+  table-layout: fixed;      /* ten equal columns, no content-driven widths */
+  font-size: 0.75rem;
 }
 
-/* Column headers: team names, pinned to the top. */
 table.board thead th {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--card);
-  box-shadow: inset 0 -1px 0 var(--line);
-  padding: 0.5rem 0.5rem 0.45rem;
-  text-align: left;
+  background: var(--board-bg);
+  padding: 0.4rem 0.35rem;
+  text-align: center;
   white-space: nowrap;
-  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.7rem;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--muted);
+  color: var(--board-ink);
 }
 
 .slot-num {
-  display: inline-block;
-  min-width: 1.3em;
-  color: var(--ink);
+  display: block;
+  font-size: 0.62rem;
+  color: #5d6874;
   font-weight: 700;
 }
 
-/* Round numbers, pinned to the left. */
 th.round-head {
   position: sticky;
   left: 0;
   z-index: 3;
-  background: var(--card);
-  box-shadow: inset -1px 0 0 var(--line);
-  width: 3rem;
-  min-width: 3rem;
-  padding: 0.35rem 0.4rem;
-  text-align: center;
+  width: 2.4rem;
+  background: var(--board-bg);
+  color: var(--board-ink);
   font-size: 0.78rem;
   font-weight: 700;
-  color: var(--ink);
+  text-align: center;
   vertical-align: middle;
 }
 
-/* The top-left corner sticks in both directions, so it needs to outrank both. */
-thead th.round-head {
-  z-index: 4;
-  box-shadow: inset -1px 0 0 var(--line), inset 0 -1px 0 var(--line);
-}
+thead th.round-head { z-index: 4; }
 
 .arrow {
   display: block;
-  font-size: 0.68rem;
+  font-size: 0.62rem;
   line-height: 1;
-  color: #b9c0c8;
+  color: #4d5762;
   font-weight: 400;
 }
 
 /* Cells ------------------------------------------------------------------- */
 
 .cell {
-  height: 4.2rem;
-  min-width: 8.8rem;
-  padding: 0.28rem 0.4rem;
+  position: relative;
+  height: 4.4rem;
+  padding: 0.9rem 0.35rem 0.25rem;
+  border-radius: 5px;
+  background: var(--board-cell);
   vertical-align: top;
-  border-right: 1px solid var(--hair);
-  border-bottom: 1px solid var(--hair);
-  transition: background-color 0.12s ease;
+  overflow: hidden;
 }
 
-.cell:last-child { border-right: 0; }
-.own-col { background: var(--accent-soft); }
-thead th.own-col { color: var(--accent); font-weight: 700; }
+.own-col { box-shadow: inset 0 0 0 1px rgba(122, 200, 160, 0.35); }
+thead th.own-col { color: #7ac8a0; box-shadow: none; }
+
+/* Pick number, quiet in the corner. */
+.pick-label {
+  position: absolute;
+  top: 0.2rem;
+  left: 0.4rem;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: #5a646f;
+  letter-spacing: 0.02em;
+}
+
+/* Resolved cells: solid position colour, name first. --------------------- */
+
+.cell.filled { color: #fff; }
+.cell.filled .pick-label { color: rgba(255, 255, 255, 0.72); }
+
+.filled-name {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.filled-sub {
+  display: block;
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  opacity: 0.85;
+}
+
+/* Solid = fact (declared or locked). Desaturated = projection. */
+.pos-bg-QB  { background: var(--qb); }
+.pos-bg-RB  { background: var(--rb); }
+.pos-bg-WR  { background: var(--wr); }
+.pos-bg-TE  { background: var(--te); }
+.pos-bg-K   { background: var(--k); }
+.pos-bg-DEF { background: var(--def); }
+
+.cell.projected.pos-bg-QB  { background: var(--qb-soft); }
+.cell.projected.pos-bg-RB  { background: var(--rb-soft); }
+.cell.projected.pos-bg-WR  { background: var(--wr-soft); }
+.cell.projected.pos-bg-TE  { background: var(--te-soft); }
+.cell.projected.pos-bg-K   { background: var(--k-soft); }
+.cell.projected.pos-bg-DEF { background: var(--def-soft); }
+.cell.projected { color: #cfd6dd; }
+.cell.projected .filled-name { font-weight: 600; }
+
+/* A locked/declared call is louder than a projection: full-strength colour
+   plus a ring, so the two never read the same at a glance. */
+.cell.locked {
+  box-shadow: inset 0 0 0 2px #fff, 0 0 0 1px rgba(0, 0, 0, 0.3);
+}
+
+.cell.own-col.locked { box-shadow: inset 0 0 0 2px #fff; }
 
 /* Candidate names --------------------------------------------------------- */
 
@@ -286,124 +377,113 @@ thead th.own-col { color: var(--accent); font-weight: 700; }
 .cell .cand {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  line-height: 1.3;
-  white-space: nowrap;
-}
-
-.cand-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: #4a535e;
-}
-
-/* Compact chips inside cells; the sidebar keeps the roomier default. */
-.cell .pos,
-.sandbox-list .pos {
-  min-width: 0;
-  padding: 0 0.28em;
-  font-size: 0.62rem;
-  line-height: 1.5;
+  gap: 0.2rem;
+  margin-bottom: 1px;
+  padding: 0 0.25rem;
   border-radius: 2px;
-  flex: 0 0 auto;
+  line-height: 1.35;
+  font-size: 0.66rem;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
-.cell .cand.pending .cand-name { color: #9aa2ab; }
+.cand-name { overflow: hidden; text-overflow: ellipsis; }
+.cand-team { opacity: 0.7; font-size: 0.58rem; font-weight: 700; }
+.cell .cand.pending { opacity: 0.5; }
 
 .pending-tag {
   flex: 0 0 auto;
-  font-size: 0.62rem;
   font-weight: 700;
-  color: #9a8433;
-  background: #f6f0dd;
-  border-radius: 2px;
-  padding: 0 0.25em;
   cursor: help;
+  opacity: 0.85;
 }
 
-/* Marks a player whose cost round isn't the round he lands in. */
 .shift-mark {
   flex: 0 0 auto;
-  font-size: 0.6rem;
+  font-size: 0.56rem;
   font-weight: 700;
-  color: #8a6a2f;
+  opacity: 0.85;
   cursor: help;
 }
 
-/* Quiet control, not a button. */
-.cell .more { margin-top: 0.1rem; }
+.cell .more { margin-top: 1px; }
 
 .cell .more summary {
   cursor: pointer;
-  font-size: 0.66rem;
-  color: #97a0aa;
+  font-size: 0.6rem;
+  color: #6d7883;
   list-style: none;
+  padding-left: 0.25rem;
 }
 
 .cell .more summary::-webkit-details-marker { display: none; }
-.cell .more summary:hover { color: var(--accent); }
-.cell .more[open] summary { color: var(--accent); margin-bottom: 0.1rem; }
+.cell .more summary:hover { color: #a9b4bf; }
 
 /* Traded ------------------------------------------------------------------ */
 
-.cell.traded { background: repeating-linear-gradient(-45deg, transparent, transparent 7px, rgba(180,140,60,0.05) 7px, rgba(180,140,60,0.05) 14px); }
-.cell.traded.own-col { background: var(--accent-soft); }
-
 .cell .badge {
-  display: inline-block;
-  margin-bottom: 0.12rem;
-  padding: 0 0.3em;
+  position: absolute;
+  top: 0.18rem;
+  right: 0.3rem;
+  padding: 0 0.25em;
   border-radius: 2px;
-  border: 1px solid #e0c9a4;
-  background: #fcf5ea;
-  color: #86612a;
-  font-size: 0.63rem;
+  background: rgba(224, 134, 64, 0.22);
+  color: #e6a86b;
+  font-size: 0.58rem;
   font-weight: 700;
-  letter-spacing: 0.01em;
 }
 
-/* Declared keepers (post-reveal) ------------------------------------------ */
-
-.cell.kept {
-  background: #2f3b34;
-  border-right-color: #3d4a42;
-  border-bottom-color: #3d4a42;
-}
-
-.cell.kept .kept-name {
-  display: block;
-  margin-top: 0.15rem;
-  font-weight: 700;
-  font-size: 0.76rem;
-  color: #fff;
-}
+.cell.filled .badge { background: rgba(0, 0, 0, 0.25); color: #fff; }
 
 /* Sandbox burn highlight -- classes added and removed by board.js. */
 .cell.burned { box-shadow: inset 0 0 0 2px currentColor; }
-.cell.burn-1 { background: var(--burn-1-bg); color: var(--burn-1-line); }
-.cell.burn-2 { background: var(--burn-2-bg); color: var(--burn-2-line); }
-.cell.burn-3 { background: var(--burn-3-bg); color: var(--burn-3-line); }
+.cell.burn-1 { background: var(--burn-1-line); color: #fff; }
+.cell.burn-2 { background: var(--burn-2-line); color: #fff; }
+.cell.burn-3 { background: var(--burn-3-line); color: #fff; }
+.cell.burned .pick-label { color: rgba(255, 255, 255, 0.8); }
 
 .burn-tag {
   display: block;
-  margin-top: 0.1rem;
+  margin-top: 0.15rem;
   font-size: 0.7rem;
   font-weight: 700;
-  line-height: 1.25;
+  line-height: 1.2;
+  color: #fff;
   white-space: normal;
 }
-
-.cell.burn-1 .burn-tag { color: var(--burn-1-ink); }
-.cell.burn-2 .burn-tag { color: var(--burn-2-ink); }
-.cell.burn-3 .burn-tag { color: var(--burn-3-ink); }
 
 .burn-tag em {
   display: block;
   font-weight: 400;
   font-style: normal;
-  font-size: 0.62rem;
-  opacity: 0.8;
+  font-size: 0.6rem;
+  opacity: 0.85;
 }
+
+/* Legend ------------------------------------------------------------------ */
+
+.board-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: center;
+  margin: 0.6rem 0 0;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.legend-key {
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 2px;
+  vertical-align: -1px;
+  margin-right: 0.25rem;
+}
+
+.legend-projected { background: var(--rb-soft); }
+
 
 /* Sandbox sidebar --------------------------------------------------------- */
 

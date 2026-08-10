@@ -14,16 +14,32 @@
   </p>
 {% else %}
 
-<h1>{{ season.year }} Draft Board</h1>
-<p class="subtle">
-  Snake draft, {{ slots|length }} teams
-  {% if revealed %}
-    &middot; <strong>keepers revealed</strong>
-  {% else %}
-    &middot; keepers not yet revealed &mdash; cells show who each team
-    <em>could</em> keep at that round's cost
+<div class="board-head">
+  <div>
+    <h1>{{ season.year }} Draft Board</h1>
+    <p class="subtle">
+      Snake draft, {{ slots|length }} teams
+      {% if revealed %}
+        &middot; <strong>keepers revealed</strong>
+      {% else %}
+        &middot; cells show who each team <em>could</em> keep at that round's cost
+      {% endif %}
+    </p>
+  </div>
+
+  {% if total_rounds > visible_round_count or show_all_rounds %}
+    {% comment %}
+      A plain link with a query parameter rather than JS: the server already
+      knows how many rounds to build, the state survives a refresh, and it is
+      shareable. Rounds 1-8 hold every keeper cost, so the rest is opt-in.
+    {% endcomment %}
+    {% if show_all_rounds %}
+      <a class="round-toggle" href="{% url 'board' %}">Show rounds 1&ndash;{{ visible_round_count }}</a>
+    {% else %}
+      <a class="round-toggle" href="{% url 'board' %}?rounds=all">Show all {{ total_rounds }} rounds</a>
+    {% endif %}
   {% endif %}
-</p>
+</div>
 
 <div class="board-layout">
 
@@ -51,6 +67,7 @@
             <span class="swatch" aria-hidden="true"></span>
             <span class="pos pos-{{ row.entry.player.position }}">{{ row.entry.player.position }}</span>
             <span class="sandbox-name">{{ row.entry.player.name }}</span>
+            {% if row.entry.player.nfl_team %}<span class="sandbox-team">{{ row.entry.player.nfl_team }}</span>{% endif %}
             {% if row.walked %}
               <span class="sandbox-cost shifted"
                     title="Costs Round {{ row.cost.cost_round }}, but you no longer own that pick, so it burns your Round {{ row.burn_round }}">R{{ row.cost.cost_round }}&rarr;{{ row.burn_round }}</span>
@@ -99,17 +116,21 @@
               {% if not cell %}
                 <td class="cell empty"></td>
               {% else %}
-                <td class="cell{% if cell.is_own %} own-col{% endif %}{% if cell.keeper %} kept{% endif %}{% if cell.traded_to %} traded{% endif %}"
+                <td class="cell{% if cell.is_own %} own-col{% endif %}{% if cell.keeper %} filled locked pos-bg-{{ cell.keeper.roster_entry.player.position }}{% endif %}{% if cell.traded_to %} traded{% endif %}"
                     data-pick-id="{{ cell.pick.pk }}"
                     data-round="{{ cell.pick.round }}">
+
+                  <span class="pick-label">{{ cell.label }}</span>
 
                   {% if cell.traded_to %}
                     <span class="badge" title="Traded to {{ cell.traded_to.name }}">&rarr; {{ cell.traded_to.owner_name }}</span>
                   {% endif %}
 
                   {% if cell.keeper %}
-                    <span class="pos pos-{{ cell.keeper.roster_entry.player.position }}">{{ cell.keeper.roster_entry.player.position }}</span>
-                    <span class="kept-name">{{ cell.keeper.roster_entry.player.name }}</span>
+                    {% with player=cell.keeper.roster_entry.player %}
+                      <span class="filled-name">{{ player.name }}</span>
+                      <span class="filled-sub">{{ player.position }}{% if player.nfl_team %} &ndash; {{ player.nfl_team }}{% endif %}</span>
+                    {% endwith %}
                   {% elif cell.candidates %}
                     <ul class="cands">
                       {% for cand in cell.candidates %}{% include "league/_candidate.html" %}{% endfor %}
@@ -131,6 +152,18 @@
       </tbody>
     </table>
   </div>
+</div>
+
+<div class="board-legend">
+  <span><span class="legend-key pos-bg-QB"></span>QB</span>
+  <span><span class="legend-key pos-bg-RB"></span>RB</span>
+  <span><span class="legend-key pos-bg-WR"></span>WR</span>
+  <span><span class="legend-key pos-bg-TE"></span>TE</span>
+  <span><span class="legend-key pos-bg-K"></span>K</span>
+  <span><span class="legend-key pos-bg-DEF"></span>DEF</span>
+  <span class="subtle">&middot;</span>
+  <span>Solid = declared or locked</span>
+  <span><span class="legend-key legend-projected"></span>Muted = projection</span>
 </div>
 
 <p class="note">
