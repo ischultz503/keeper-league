@@ -1,4 +1,4 @@
-# Keeper League Rules — Third Draft
+# Keeper League Rules
 
 ---
 
