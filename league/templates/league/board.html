@@ -48,7 +48,7 @@
         shareable. Rounds 1-8 hold every keeper cost, so the rest is opt-in.
       {% endcomment %}
       {% if show_all_rounds %}
-        <a class="round-toggle" href="{% url 'board' %}">Show rounds 1&ndash;{{ visible_round_count }}</a>
+        <a class="round-toggle" href="{% url 'board' %}">Show rounds 1&ndash;{{ default_round_count }}</a>
       {% else %}
         <a class="round-toggle" href="{% url 'board' %}?rounds=all">Show all {{ total_rounds }} rounds</a>
       {% endif %}

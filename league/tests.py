@@ -1543,6 +1543,13 @@ class BoardViewTests(TestCase):
         self.assertEqual(len(rows), 8)
         self.assertEqual([r['round'] for r in rows], list(range(1, 9)))
 
+    def test_the_collapse_link_names_the_view_it_goes_back_to(self):
+        """Expanded, the link must offer 1-8, not restate the 16 on screen."""
+        html = self.client.get(reverse('board'), {'rounds': 'all'}).content.decode()
+
+        self.assertIn('Show rounds 1&ndash;8', html)
+        self.assertNotIn(f'Show rounds 1&ndash;{ROUNDS}', html)
+
     def test_the_toggle_expands_to_every_round(self):
         response = self.client.get(reverse('board'), {'rounds': 'all'})
 

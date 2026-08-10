@@ -322,6 +322,10 @@ def board(request):
         'show_all_rounds': show_all_rounds,
         'total_rounds': len(rounds),
         'visible_round_count': len(visible_rounds),
+        # What the collapsed view shows. Distinct from visible_round_count,
+        # which is however many rounds are on screen *right now* -- the link
+        # back has to name where it goes, not where it already is.
+        'default_round_count': min(DEFAULT_VISIBLE_ROUNDS, len(rounds)),
         'team_warnings': team_warnings,
         'prediction_count': len(predicted_entry_ids),
         # Post-reveal scorecard: how many of this user's calls were right.
