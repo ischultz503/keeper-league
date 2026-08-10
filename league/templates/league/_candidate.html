@@ -1,0 +1,12 @@
+{% comment %}
+  One possible keeper in a board cell. Expects `cand`, a dict from the board
+  view: {entry, cost_round, placed_round, walked}. Included from board.html for
+  both the visible three and the "+N more" list.
+{% endcomment %}
+<li class="cand{% if cand.entry.eligible is None %} pending{% endif %}"
+    {% if cand.walked %}title="Costs Round {{ cand.cost_round }}. {{ cand.entry.team.owner_name }} no longer owns that pick, so keeping him burns Round {{ cand.placed_round }} instead."{% elif cand.entry.eligible is None %}title="Eligibility not yet reviewed"{% endif %}>
+  <span class="pos pos-{{ cand.entry.player.position }}">{{ cand.entry.player.position }}</span>
+  <span class="cand-name">{{ cand.entry.player.name }}</span>
+  {% if cand.walked %}<span class="shift-mark">R{{ cand.cost_round }}&rarr;</span>{% endif %}
+  {% if cand.entry.eligible is None %}<span class="pending-tag" title="Eligibility not yet reviewed">?</span>{% endif %}
+</li>

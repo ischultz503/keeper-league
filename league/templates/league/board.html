@@ -48,10 +48,16 @@
             <input type="checkbox" class="keeper-choice"
                    value="{{ row.entry.pk }}"
                    data-player="{{ row.entry.player.name }}">
-            <span class="sandbox-name">{{ row.entry.player.name }}</span>
+            <span class="swatch" aria-hidden="true"></span>
             <span class="pos pos-{{ row.entry.player.position }}">{{ row.entry.player.position }}</span>
-            <span class="sandbox-cost">R{{ row.cost.cost_round }}</span>
-            {% if row.keeps %}<span class="subtle">kept {{ row.keeps }}x</span>{% endif %}
+            <span class="sandbox-name">{{ row.entry.player.name }}</span>
+            {% if row.walked %}
+              <span class="sandbox-cost shifted"
+                    title="Costs Round {{ row.cost.cost_round }}, but you no longer own that pick, so it burns your Round {{ row.burn_round }}">R{{ row.cost.cost_round }}&rarr;{{ row.burn_round }}</span>
+            {% else %}
+              <span class="sandbox-cost">R{{ row.cost.cost_round }}</span>
+            {% endif %}
+            {% if row.keeps %}<span class="kept-count" title="Kept {{ row.keeps }} time(s) already">{{ row.keeps }}&times;</span>{% endif %}
           </label>
         </li>
       {% empty %}
@@ -102,25 +108,17 @@
                   {% endif %}
 
                   {% if cell.keeper %}
-                    <span class="kept-name">{{ cell.keeper.roster_entry.player.name }}</span>
                     <span class="pos pos-{{ cell.keeper.roster_entry.player.position }}">{{ cell.keeper.roster_entry.player.position }}</span>
+                    <span class="kept-name">{{ cell.keeper.roster_entry.player.name }}</span>
                   {% elif cell.candidates %}
                     <ul class="cands">
-                      {% for entry in cell.candidates %}
-                        <li{% if entry.eligible is None %} class="pending" title="Eligibility not yet reviewed"{% endif %}>
-                          {{ entry.player.name }}{% if entry.eligible is None %} <span class="pending-tag">pending</span>{% endif %}
-                        </li>
-                      {% endfor %}
+                      {% for cand in cell.candidates %}{% include "league/_candidate.html" %}{% endfor %}
                     </ul>
                     {% if cell.extra_candidates %}
                       <details class="more">
                         <summary>+{{ cell.extra_candidates|length }} more</summary>
                         <ul class="cands">
-                          {% for entry in cell.extra_candidates %}
-                            <li{% if entry.eligible is None %} class="pending"{% endif %}>
-                              {{ entry.player.name }}{% if entry.eligible is None %} <span class="pending-tag">pending</span>{% endif %}
-                            </li>
-                          {% endfor %}
+                          {% for cand in cell.extra_candidates %}{% include "league/_candidate.html" %}{% endfor %}
                         </ul>
                       </details>
                     {% endif %}

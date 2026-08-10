@@ -41,12 +41,33 @@
     });
   }
 
+  /* Each selected player gets a colour slot (1-3). The sidebar swatch and the
+   * burned cell both wear it, so the mapping from "player I ticked" to "slot
+   * that goes dark" is visible rather than inferred. */
+  var SLOTS = 3;
+
+  function colourIndex(entryId) {
+    var ids = selectedIds();
+    var at = ids.indexOf(entryId);
+    return at === -1 ? 0 : (at % SLOTS) + 1;
+  }
+
   function clearBoard() {
     document.querySelectorAll('.cell.burned').forEach(function (cell) {
-      cell.classList.remove('burned');
+      cell.classList.remove('burned', 'burn-1', 'burn-2', 'burn-3');
       cell.removeAttribute('title');
       var tag = cell.querySelector('.burn-tag');
       if (tag) tag.remove();
+    });
+  }
+
+  function paintSwatches() {
+    boxes.forEach(function (box) {
+      var item = box.closest('li');
+      item.classList.remove('picked', 'burn-1', 'burn-2', 'burn-3');
+      if (box.checked) {
+        item.classList.add('picked', 'burn-' + colourIndex(parseInt(box.value, 10)));
+      }
     });
   }
 
@@ -54,20 +75,19 @@
     var cell = document.querySelector('.cell[data-pick-id="' + burn.pick_id + '"]');
     if (!cell) return;
 
-    cell.classList.add('burned');
+    cell.classList.add('burned', 'burn-' + colourIndex(burn.entry_id));
 
-    var why = burn.via === 'base cost'
+    cell.title = burn.via === 'base cost'
       ? burn.player + ' costs Round ' + burn.cost_round
       : burn.player + ' costs Round ' + burn.cost_round +
         ', moved here (' + burn.via + ')';
-    cell.title = why;
 
     var tag = document.createElement('span');
     tag.className = 'burn-tag';
     tag.textContent = burn.player;
     if (burn.via !== 'base cost') {
       var via = document.createElement('em');
-      via.textContent = ' ' + burn.via;
+      via.textContent = burn.via;
       tag.appendChild(via);
     }
     cell.appendChild(tag);
@@ -75,6 +95,7 @@
 
   function render(data) {
     clearBoard();
+    paintSwatches();
     data.burned.forEach(paintBurn);
 
     var parts = [];
@@ -114,6 +135,8 @@
   function preview() {
     enforceMax();
     var ids = selectedIds();
+
+    paintSwatches();
 
     if (ids.length === 0) {
       clearBoard();

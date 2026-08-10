@@ -8,6 +8,16 @@
   --card: #ffffff;
   --accent: #1f5f3f;
   --accent-soft: #eaf3ee;
+
+  /* Hairline for the board grid: present enough to align by, quiet enough
+     that names read as floating on it rather than boxed in. */
+  --hair: #edeff2;
+
+  /* Three keeper slots, three colours. The sidebar swatch and the burned cell
+     share one, so "this player burns that slot" is visible, not inferred. */
+  --burn-1-bg: #fdefd2;  --burn-1-line: #c5871c;  --burn-1-ink: #6d4408;
+  --burn-2-bg: #ece5fa;  --burn-2-line: #7458bb;  --burn-2-ink: #402a75;
+  --burn-3-bg: #d8eeec;  --burn-3-line: #2c8480;  --burn-3-ink: #17504d;
 }
 
 * { box-sizing: border-box; }
@@ -171,177 +181,326 @@ table.data a { color: var(--accent); font-weight: 600; }
 
 /* Draft board ------------------------------------------------------------- */
 
-main.wide { max-width: 1400px; }
+main.wide { max-width: 1440px; }
 
 .board-layout {
   display: flex;
   align-items: flex-start;
-  gap: 1.25rem;
-  margin: 1.25rem 0;
+  gap: 1.1rem;
+  margin: 1.1rem 0 1.5rem;
 }
 
-/* The grid scrolls sideways rather than reflowing: ten columns cannot usefully
-   stack on a phone, and a scrollable board keeps the snake readable. */
+/* Ten columns cannot usefully stack on a phone, so the grid scrolls sideways
+   with the round column pinned. Both axes stick, so you never lose your place. */
 .board-scroll {
   flex: 1 1 auto;
   min-width: 0;
-  overflow-x: auto;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  max-height: 78vh;
+  overflow: auto;
   background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 
 table.board {
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
+  width: 100%;
 }
 
-table.board th,
-table.board td {
-  border-right: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  padding: 0.35rem 0.45rem;
-  vertical-align: top;
-  text-align: left;
-}
-
+/* Column headers: team names, pinned to the top. */
 table.board thead th {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: #fbfcfd;
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--muted);
+  background: var(--card);
+  box-shadow: inset 0 -1px 0 var(--line);
+  padding: 0.5rem 0.5rem 0.45rem;
+  text-align: left;
   white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
 }
 
 .slot-num {
   display: inline-block;
-  min-width: 1.4em;
+  min-width: 1.3em;
   color: var(--ink);
   font-weight: 700;
 }
 
-/* Sticky round column, so you never lose which round you are looking at. */
+/* Round numbers, pinned to the left. */
 th.round-head {
   position: sticky;
   left: 0;
   z-index: 3;
-  background: #fbfcfd;
-  font-weight: 700;
+  background: var(--card);
+  box-shadow: inset -1px 0 0 var(--line);
+  width: 3rem;
+  min-width: 3rem;
+  padding: 0.35rem 0.4rem;
   text-align: center;
-  white-space: nowrap;
-  min-width: 3.2rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ink);
+  vertical-align: middle;
 }
 
-thead th.round-head { z-index: 4; }
-.arrow { color: var(--muted); font-weight: 400; }
+/* The top-left corner sticks in both directions, so it needs to outrank both. */
+thead th.round-head {
+  z-index: 4;
+  box-shadow: inset -1px 0 0 var(--line), inset 0 -1px 0 var(--line);
+}
+
+.arrow {
+  display: block;
+  font-size: 0.68rem;
+  line-height: 1;
+  color: #b9c0c8;
+  font-weight: 400;
+}
+
+/* Cells ------------------------------------------------------------------- */
 
 .cell {
-  min-width: 8.5rem;
-  height: 3.1rem;
-  position: relative;
+  height: 4.2rem;
+  min-width: 8.8rem;
+  padding: 0.28rem 0.4rem;
+  vertical-align: top;
+  border-right: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair);
+  transition: background-color 0.12s ease;
 }
 
+.cell:last-child { border-right: 0; }
 .own-col { background: var(--accent-soft); }
+thead th.own-col { color: var(--accent); font-weight: 700; }
 
-.cell .badge {
-  display: inline-block;
-  font-size: 0.68rem;
-  font-weight: 700;
-  padding: 0.05em 0.35em;
-  border-radius: 3px;
-  background: #f9e6d5;
-  color: #7a4a1e;
-  margin-bottom: 0.15rem;
-}
+/* Candidate names --------------------------------------------------------- */
 
 .cell .cands { margin: 0; padding: 0; list-style: none; }
-.cell .cands li { color: var(--muted); font-size: 0.74rem; line-height: 1.35; }
-.cell .cands li.pending { opacity: 0.55; }
+
+.cell .cand {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.cand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #4a535e;
+}
+
+/* Compact chips inside cells; the sidebar keeps the roomier default. */
+.cell .pos,
+.sandbox-list .pos {
+  min-width: 0;
+  padding: 0 0.28em;
+  font-size: 0.62rem;
+  line-height: 1.5;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+.cell .cand.pending .cand-name { color: #9aa2ab; }
 
 .pending-tag {
+  flex: 0 0 auto;
   font-size: 0.62rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  background: #f4ecd6;
-  color: #6d5716;
-  padding: 0 0.25em;
+  font-weight: 700;
+  color: #9a8433;
+  background: #f6f0dd;
   border-radius: 2px;
+  padding: 0 0.25em;
+  cursor: help;
 }
+
+/* Marks a player whose cost round isn't the round he lands in. */
+.shift-mark {
+  flex: 0 0 auto;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: #8a6a2f;
+  cursor: help;
+}
+
+/* Quiet control, not a button. */
+.cell .more { margin-top: 0.1rem; }
 
 .cell .more summary {
   cursor: pointer;
-  font-size: 0.7rem;
-  color: var(--accent);
+  font-size: 0.66rem;
+  color: #97a0aa;
+  list-style: none;
 }
 
+.cell .more summary::-webkit-details-marker { display: none; }
+.cell .more summary:hover { color: var(--accent); }
+.cell .more[open] summary { color: var(--accent); margin-bottom: 0.1rem; }
+
+/* Traded ------------------------------------------------------------------ */
+
+.cell.traded { background: repeating-linear-gradient(-45deg, transparent, transparent 7px, rgba(180,140,60,0.05) 7px, rgba(180,140,60,0.05) 14px); }
+.cell.traded.own-col { background: var(--accent-soft); }
+
+.cell .badge {
+  display: inline-block;
+  margin-bottom: 0.12rem;
+  padding: 0 0.3em;
+  border-radius: 2px;
+  border: 1px solid #e0c9a4;
+  background: #fcf5ea;
+  color: #86612a;
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+/* Declared keepers (post-reveal) ------------------------------------------ */
+
 .cell.kept {
-  background: #2c3a33;
+  background: #2f3b34;
+  border-right-color: #3d4a42;
+  border-bottom-color: #3d4a42;
+}
+
+.cell.kept .kept-name {
+  display: block;
+  margin-top: 0.15rem;
+  font-weight: 700;
+  font-size: 0.76rem;
   color: #fff;
 }
 
-.cell.kept .kept-name { font-weight: 700; font-size: 0.78rem; display: block; }
-
-/* Sandbox highlight -- added and removed by board.js. */
-.cell.burned {
-  background: #fde9c8;
-  box-shadow: inset 0 0 0 2px #c98a1e;
-}
+/* Sandbox burn highlight -- classes added and removed by board.js. */
+.cell.burned { box-shadow: inset 0 0 0 2px currentColor; }
+.cell.burn-1 { background: var(--burn-1-bg); color: var(--burn-1-line); }
+.cell.burn-2 { background: var(--burn-2-bg); color: var(--burn-2-line); }
+.cell.burn-3 { background: var(--burn-3-bg); color: var(--burn-3-line); }
 
 .burn-tag {
   display: block;
-  font-size: 0.72rem;
+  margin-top: 0.1rem;
+  font-size: 0.7rem;
   font-weight: 700;
-  color: #6d4408;
+  line-height: 1.25;
+  white-space: normal;
 }
 
-.burn-tag em { font-weight: 400; font-style: italic; opacity: 0.75; }
+.cell.burn-1 .burn-tag { color: var(--burn-1-ink); }
+.cell.burn-2 .burn-tag { color: var(--burn-2-ink); }
+.cell.burn-3 .burn-tag { color: var(--burn-3-ink); }
+
+.burn-tag em {
+  display: block;
+  font-weight: 400;
+  font-style: normal;
+  font-size: 0.62rem;
+  opacity: 0.8;
+}
 
 /* Sandbox sidebar --------------------------------------------------------- */
 
 .sandbox {
-  flex: 0 0 17rem;
+  flex: 0 0 18rem;
+  position: sticky;
+  top: 1rem;
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0.9rem 1rem;
+  border-radius: 8px;
+  padding: 0.9rem 1rem 0.8rem;
 }
 
-.sandbox h2 { font-size: 1rem; margin: 0 0 0.15rem; }
-.sandbox-list { list-style: none; margin: 0.8rem 0; padding: 0; }
-.sandbox-list li { margin-bottom: 0.2rem; font-size: 0.82rem; }
-.sandbox-list li.disabled { opacity: 0.45; }
+.sandbox h2 { font-size: 0.95rem; margin: 0 0 0.1rem; }
+.sandbox-list { list-style: none; margin: 0.7rem 0 0.6rem; padding: 0; }
+
+.sandbox-list li {
+  border-radius: 4px;
+  margin-bottom: 0.1rem;
+  font-size: 0.8rem;
+}
+
+.sandbox-list li.disabled { opacity: 0.4; }
 
 .sandbox-list label {
   display: flex;
   align-items: center;
   gap: 0.35rem;
+  padding: 0.2rem 0.3rem;
   cursor: pointer;
 }
 
-.sandbox-list input:disabled + .sandbox-name { cursor: default; }
-.sandbox-name { flex: 1 1 auto; }
-.sandbox-cost { font-weight: 700; }
+.sandbox-list li.disabled label { cursor: default; }
+.sandbox-list li:not(.disabled):hover { background: #f5f7f8; }
+
+/* The swatch is invisible until picked, then wears the same colour as the
+   cell that player burns. */
+.swatch {
+  flex: 0 0 auto;
+  width: 0.55rem;
+  height: 1.1rem;
+  border-radius: 2px;
+  background: transparent;
+}
+
+.sandbox-list li.picked { font-weight: 600; }
+.sandbox-list li.picked.burn-1 { background: var(--burn-1-bg); }
+.sandbox-list li.picked.burn-2 { background: var(--burn-2-bg); }
+.sandbox-list li.picked.burn-3 { background: var(--burn-3-bg); }
+.sandbox-list li.picked.burn-1 .swatch { background: var(--burn-1-line); }
+.sandbox-list li.picked.burn-2 .swatch { background: var(--burn-2-line); }
+.sandbox-list li.picked.burn-3 .swatch { background: var(--burn-3-line); }
+
+.sandbox-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sandbox-cost {
+  flex: 0 0 auto;
+  font-weight: 700;
+  font-size: 0.74rem;
+  color: #4a535e;
+}
+
+.sandbox-cost.shifted { color: #8a6a2f; cursor: help; }
+
+.kept-count {
+  flex: 0 0 auto;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #7a5bbf;
+  cursor: help;
+}
 
 .sandbox-result {
   border-top: 1px solid var(--line);
-  padding-top: 0.6rem;
-  font-size: 0.82rem;
+  padding-top: 0.55rem;
+  font-size: 0.8rem;
 }
 
-.sandbox-result ul { margin: 0.3rem 0 0; padding-left: 1.1rem; }
+.sandbox-result ul { margin: 0.25rem 0 0; padding-left: 1.05rem; }
+.sandbox-result li { margin-bottom: 0.15rem; }
 .sandbox-good { color: var(--accent); font-weight: 600; margin: 0; }
 .sandbox-bad { color: #a12a2a; font-weight: 600; margin: 0; }
 .sandbox-warn { color: #7a5b12; }
 
-@media (max-width: 800px) {
+.sandbox .note { font-size: 0.72rem; margin: 0.6rem 0 0; }
+
+@media (max-width: 860px) {
   .board-layout { flex-direction: column; }
-  .sandbox { flex: 1 1 auto; width: 100%; }
+  .sandbox { flex: 1 1 auto; width: 100%; position: static; }
+  .board-scroll { max-height: none; width: 100%; }
 }
+
 
 /* Login ------------------------------------------------------------------- */
 

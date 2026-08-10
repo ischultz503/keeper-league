@@ -252,6 +252,51 @@ class BurnResult:
         return [a.pick for a in self.assignments]
 
 
+def solo_burn_targets(team, season, owned_picks=None):
+    """Map {cost_round: DraftPick} for a keeper kept ON ITS OWN.
+
+    Equivalent to calling resolve_burned_picks(team, season, [cost_round]) for
+    each round, but computed once for the whole team. That equivalence holds
+    only because a solo keeper cannot collide with anything: each cost round
+    resolves independently of the others, so the answer is deterministic and
+    shared by every candidate at that cost.
+
+    This is what the draft board uses to place other teams' possible keepers.
+    Multi-keeper chains are NOT modelled here -- which pick a second keeper
+    burns depends on a set only that manager knows.
+
+    Pass owned_picks (already-fetched, un-forfeited, owned by team) to avoid a
+    query when the caller has the season's picks in hand.
+    """
+    from .models import DraftPick
+
+    if owned_picks is None:
+        owned_picks = list(
+            DraftPick.objects
+            .filter(season=season, current_team=team, forfeited=False)
+            .select_related('original_team')
+        )
+
+    by_round = {}
+    for pick in owned_picks:
+        by_round.setdefault(pick.round, []).append(pick)
+
+    if not by_round:
+        return {}
+
+    targets = {}
+    for cost in range(EARLIEST_ROUND, max(by_round) + 1):
+        for round_number in range(cost, EARLIEST_ROUND - 1, -1):
+            available = by_round.get(round_number)
+            if available:
+                targets[cost] = _choose_pick(available, team, None, round_number)
+                break
+        # No pick at or before the cost round: that keeper is impossible, and
+        # the round is simply absent from the map.
+
+    return targets
+
+
 def _choose_pick(candidates, team, chosen_picks, round_number):
     """Section 3. Which pick to burn when a team owns more than one in a round.
 

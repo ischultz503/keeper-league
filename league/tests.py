@@ -496,6 +496,41 @@ class BurnResolutionTests(TestCase):
         self.assertEqual(forwards, backwards)
         self.assertEqual(forwards, [2, 7, 8])
 
+    def test_solo_burn_targets_agree_with_resolving_one_keeper_at_a_time(self):
+        """solo_burn_targets is a batched shortcut. If it ever disagrees with
+        resolve_burned_picks for a lone keeper, the board is lying."""
+        self.give_away(self.marcus, 4)
+        self.give_away(self.marcus, 7)
+
+        targets = engine.solo_burn_targets(self.marcus, self.season)
+
+        for cost in range(1, 9):
+            with self.subTest(cost_round=cost):
+                expected = self.burn(self.marcus, [cost]).assignments[0].pick
+                self.assertEqual(targets[cost].pk, expected.pk)
+
+    def test_solo_burn_targets_walk_past_a_missing_round(self):
+        self.give_away(self.marcus, 4)
+        targets = engine.solo_burn_targets(self.marcus, self.season)
+
+        self.assertEqual(targets[4].round, 3)      # missing pick -> next earlier
+        self.assertEqual(targets[5].round, 5)      # untouched
+
+    def test_solo_burn_targets_omit_rounds_that_cannot_be_paid(self):
+        self.give_away(self.isaac, 1)
+        targets = engine.solo_burn_targets(self.isaac, self.season)
+
+        self.assertNotIn(1, targets)
+        self.assertEqual(targets[2].round, 2)
+
+    def test_solo_burn_targets_prefer_the_teams_own_pick(self):
+        acquired = self.pick(self.marcus, 4)
+        acquired.current_team = self.isaac
+        acquired.save(update_fields=['current_team'])
+
+        targets = engine.solo_burn_targets(self.isaac, self.season)
+        self.assertEqual(targets[4].original_team, self.isaac)
+
     def test_forfeited_picks_are_not_available_to_burn_again(self):
         pick = self.pick(self.isaac, 8)
         pick.forfeited = True
@@ -853,13 +888,116 @@ class BoardViewTests(TestCase):
         row = next(r for r in response.context['rows'] if r['round'] == round_number)
         return row['cells'][column]
 
+    def names_in(self, response, round_number, team):
+        cell = self.cell_for(response, round_number, team)
+        return [c['entry'].player.name for c in cell['candidates']]
+
     def test_candidates_are_listed_by_current_year_cost(self):
         make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
         response = self.client.get(reverse('board'))
 
-        cell = self.cell_for(response, round_number=4, team=self.marcus)
-        self.assertIn('Jaxon Smith-Njigba', [e.player.name for e in cell['candidates']])
+        self.assertIn('Jaxon Smith-Njigba', self.names_in(response, 4, self.marcus))
         self.assertContains(response, 'Jaxon Smith-Njigba')
+
+    def test_a_candidate_lands_where_the_missing_pick_rule_puts_him(self):
+        """Regression: candidates used to be placed at their base cost round,
+        even when the team no longer owned a pick there. Marcus traded his R4
+        to Isaac, so keeping JSN deterministically burns his R3."""
+        pick = DraftPick.objects.get(season=self.season, round=4, original_team=self.marcus)
+        PickTrade.objects.create(
+            season=self.season, pick=pick, from_team=self.marcus,
+            to_team=self.isaac, date='2026-01-15',
+        )
+        make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+
+        response = self.client.get(reverse('board'))
+
+        self.assertNotIn('Jaxon Smith-Njigba', self.names_in(response, 4, self.marcus))
+        self.assertIn('Jaxon Smith-Njigba', self.names_in(response, 3, self.marcus))
+
+    def test_a_shifted_candidate_is_annotated_with_his_real_cost(self):
+        pick = DraftPick.objects.get(season=self.season, round=4, original_team=self.marcus)
+        PickTrade.objects.create(
+            season=self.season, pick=pick, from_team=self.marcus,
+            to_team=self.isaac, date='2026-01-15',
+        )
+        make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+
+        response = self.client.get(reverse('board'))
+        cand = self.cell_for(response, 3, self.marcus)['candidates'][0]
+
+        self.assertTrue(cand['walked'])
+        self.assertEqual(cand['cost_round'], 4)
+        self.assertEqual(cand['placed_round'], 3)
+        self.assertContains(response, 'no longer owns that pick')
+
+    def test_an_unaffected_candidate_stays_at_his_base_cost(self):
+        """The trade must not disturb players whose own round is intact."""
+        pick = DraftPick.objects.get(season=self.season, round=4, original_team=self.marcus)
+        PickTrade.objects.create(
+            season=self.season, pick=pick, from_team=self.marcus,
+            to_team=self.isaac, date='2026-01-15',
+        )
+        make_entry(self.roster_season, self.marcus, 'Normal Guy', 6)
+
+        response = self.client.get(reverse('board'))
+        self.assertIn('Normal Guy', self.names_in(response, 6, self.marcus))
+        self.assertFalse(self.cell_for(response, 6, self.marcus)['candidates'][0]['walked'])
+
+    def test_the_receiving_team_places_candidates_in_a_round_it_owns_twice(self):
+        """Isaac now owns two R4 picks. His R4-cost players still land on R4 --
+        the extra pick changes nothing about placement."""
+        pick = DraftPick.objects.get(season=self.season, round=4, original_team=self.marcus)
+        PickTrade.objects.create(
+            season=self.season, pick=pick, from_team=self.marcus,
+            to_team=self.isaac, date='2026-01-15',
+        )
+        make_entry(self.roster_season, self.isaac, 'My R4 Guy', 4)
+
+        response = self.client.get(reverse('board'))
+        cand = self.cell_for(response, 4, self.isaac)['candidates'][0]
+
+        self.assertEqual(cand['entry'].player.name, 'My R4 Guy')
+        self.assertFalse(cand['walked'])
+        # The cell shown is Isaac's own R4 slot, not the one acquired from Marcus.
+        self.assertEqual(cand['placed_round'], 4)
+
+    def test_sidebar_shows_the_shifted_cost_too(self):
+        """Sidebar and grid must agree, or the manager sees two answers."""
+        pick = DraftPick.objects.get(season=self.season, round=4, original_team=self.isaac)
+        PickTrade.objects.create(
+            season=self.season, pick=pick, from_team=self.isaac,
+            to_team=self.marcus, date='2026-01-15',
+        )
+        make_entry(self.roster_season, self.isaac, 'My R4 Guy', 4)
+
+        row = self.client.get(reverse('board')).context['sandbox_players'][0]
+        self.assertEqual(row['cost'].cost_round, 4)
+        self.assertEqual(row['burn_round'], 3)
+        self.assertTrue(row['walked'])
+
+    def test_an_entered_declaration_does_not_shift_candidates_before_reveal(self):
+        """Rules section 1: declarations stay secret until the reveal. The
+        commissioner enters all ten teams before flipping the switch, so a
+        forfeited pick must not visibly move that team's candidate cells --
+        that would leak who had already declared."""
+        declared = make_entry(self.roster_season, self.isaac, 'Declared Guy', 2)
+        KeeperSelection.objects.create(
+            season=self.season, team=self.isaac, roster_entry=declared
+        )
+        engine.recompute_team_selections(self.isaac, self.season)
+        self.assertTrue(
+            DraftPick.objects.get(season=self.season, round=2, original_team=self.isaac).forfeited
+        )
+
+        other = make_entry(self.roster_season, self.isaac, 'Other R2 Guy', 2)
+        response = self.client.get(reverse('board'))
+
+        # Still on R2, not pushed to R1 by the hidden declaration.
+        self.assertIn(other.player.name, self.names_in(response, 2, self.isaac))
+        self.assertFalse(
+            any(c['walked'] for c in self.cell_for(response, 2, self.isaac)['candidates'])
+        )
 
     def test_ineligible_players_are_left_off_the_board(self):
         make_entry(self.roster_season, self.marcus, 'Bench Guy', 4, eligible=False)
@@ -1056,7 +1194,7 @@ class KeeperPreviewApiTests(TestCase):
         self.assertEqual(set(data), {'valid', 'errors', 'warnings', 'burned'})
         self.assertEqual(
             set(data['burned'][0]),
-            {'pick_id', 'round', 'cost_round', 'via', 'player'},
+            {'pick_id', 'round', 'cost_round', 'via', 'entry_id', 'player'},
         )
 
     def test_the_endpoint_never_writes(self):

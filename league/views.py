@@ -173,11 +173,18 @@ def board(request):
             if selection.burned_pick_id:
                 kept_by_pick[selection.burned_pick_id] = selection
 
-    # Pre-reveal: who *could* be kept at each (round, team), by base cost only.
-    # Chain effects (collision, missing pick) are deliberately not projected for
-    # other teams -- they depend on a keeper set nobody outside that team knows.
+    # Pre-reveal: who *could* be kept, placed in the cell that keeping them
+    # would actually burn. For most players that is their cost round; for a
+    # player whose team no longer owns that pick, the missing-pick rule shifts
+    # it earlier (rules section 3), and placing them at cost round would point
+    # at a slot the team cannot spend.
+    #
+    # Only the SOLO placement is shown. A second keeper's collision depends on
+    # a set nobody outside that team knows, so it is not projected here.
     candidates = {}
     if not revealed and roster_season is not None:
+        burn_targets = _solo_burn_targets_by_team(season, picks, slots)
+
         entries = list(
             RosterEntry.objects
             .filter(season=roster_season)
@@ -185,10 +192,24 @@ def board(request):
             .select_related('player', 'team')
         )
         costs = engine.current_costs(entries, season)
+
         for entry in entries:
             cost = costs[entry.pk]
-            if cost.keepable:
-                candidates.setdefault((cost.cost_round, entry.team_id), []).append(entry)
+            if not cost.keepable:
+                continue
+
+            target = burn_targets.get(entry.team_id, {}).get(cost.cost_round)
+            if target is None:
+                # The team owns nothing at or before the cost round, so there
+                # is no cell where this keep could be paid for.
+                continue
+
+            candidates.setdefault((target.round, entry.team_id), []).append({
+                'entry': entry,
+                'cost_round': cost.cost_round,
+                'placed_round': target.round,
+                'walked': target.round != cost.cost_round,
+            })
 
     rows = []
     for round_number in rounds:
@@ -199,7 +220,10 @@ def board(request):
                 cells.append(None)
                 continue
 
-            cell_candidates = candidates.get((round_number, slot.team_id), [])
+            cell_candidates = sorted(
+                candidates.get((round_number, slot.team_id), []),
+                key=lambda c: (c['cost_round'], c['entry'].player.name),
+            )
             cells.append({
                 'pick': pick,
                 'team': slot.team,
@@ -228,6 +252,30 @@ def board(request):
     })
 
 
+def _solo_burn_targets_by_team(season, picks, slots):
+    """{team_id: {cost_round: DraftPick}} for every team, from picks already in hand.
+
+    The board has already fetched the season's picks, so grouping them here
+    keeps the whole placement pass query-free.
+    """
+    # Forfeitures are deliberately ignored here, for two reasons. Semantically,
+    # these cells answer "if this were your only keeper", and a solo keeper is
+    # unaffected by other declarations. Practically, the commissioner enters all
+    # ten teams' declarations before flipping the reveal switch -- if a burned
+    # pick shifted a team's candidates during that window, the board would leak
+    # that they had declared, which rules section 1 forbids.
+    owned = {}
+    for pick in picks:
+        owned.setdefault(pick.current_team_id, []).append(pick)
+
+    return {
+        slot.team_id: engine.solo_burn_targets(
+            slot.team, season, owned.get(slot.team_id, [])
+        )
+        for slot in slots
+    }
+
+
 def _sandbox_players(team, roster_season, season):
     """The logged-in manager's eligible players, priced for the sandbox list."""
     if team is None or roster_season is None or season is None:
@@ -239,16 +287,22 @@ def _sandbox_players(team, roster_season, season):
         .select_related('player')
     )
     costs = engine.current_costs(entries, season)
+    # Same solo placement the board uses, so the sidebar and the grid agree.
+    targets = engine.solo_burn_targets(team, season)
 
     players = []
     for entry in entries:
         cost = costs[entry.pk]
         if not cost.keepable:
             continue
+
+        target = targets.get(cost.cost_round)
         players.append({
             'entry': entry,
             'cost': cost,
             'keeps': cost.times_kept_before,
+            'burn_round': target.round if target else None,
+            'walked': target is not None and target.round != cost.cost_round,
         })
 
     players.sort(key=lambda p: (p['cost'].cost_round, p['entry'].player.name))
@@ -309,6 +363,9 @@ def keeper_preview(request):
                 'round': assignment.pick.round,
                 'cost_round': assignment.cost_round,
                 'via': assignment.via,
+                # entry_id lets the board tie a burned cell back to the exact
+                # checkbox that caused it, for the colour-matched swatches.
+                'entry_id': assignment.entry.pk if assignment.entry else None,
                 'player': assignment.entry.player.name if assignment.entry else '',
             }
             for assignment in result.burned_picks
