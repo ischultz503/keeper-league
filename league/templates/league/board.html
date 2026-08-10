@@ -27,19 +27,33 @@
     </p>
   </div>
 
-  {% if total_rounds > visible_round_count or show_all_rounds %}
+  <div class="board-controls" id="board-controls" data-simulate-url="{% url 'simulate' %}">
     {% comment %}
-      A plain link with a query parameter rather than JS: the server already
-      knows how many rounds to build, the state survives a refresh, and it is
-      shareable. Rounds 1-8 hold every keeper cost, so the rest is opt-in.
+      Rendered here so board.js can read the token and send it as an
+      X-CSRFToken header on the simulate POST -- the same double-submit pattern
+      the sandbox uses. There is no form to submit; the sandbox selection must
+      never travel in a URL. See views.simulate.
     {% endcomment %}
-    {% if show_all_rounds %}
-      <a class="round-toggle" href="{% url 'board' %}">Show rounds 1&ndash;{{ visible_round_count }}</a>
-    {% else %}
-      <a class="round-toggle" href="{% url 'board' %}?rounds=all">Show all {{ total_rounds }} rounds</a>
+    {% csrf_token %}
+    <button type="button" class="board-btn" id="simulate-btn">Simulate draft</button>
+    <button type="button" class="board-btn ghost" id="clear-sim-btn" hidden>Clear simulation</button>
+
+    {% if total_rounds > visible_round_count or show_all_rounds %}
+      {% comment %}
+        A plain link with a query parameter rather than JS: the server already
+        knows how many rounds to build, the state survives a refresh, and it is
+        shareable. Rounds 1-8 hold every keeper cost, so the rest is opt-in.
+      {% endcomment %}
+      {% if show_all_rounds %}
+        <a class="round-toggle" href="{% url 'board' %}">Show rounds 1&ndash;{{ visible_round_count }}</a>
+      {% else %}
+        <a class="round-toggle" href="{% url 'board' %}?rounds=all">Show all {{ total_rounds }} rounds</a>
+      {% endif %}
     {% endif %}
-  {% endif %}
+  </div>
 </div>
+
+<p class="sim-error" id="sim-error" hidden></p>
 
 <div class="board-layout">
 
@@ -208,6 +222,23 @@
   <span><span class="legend-key legend-projected"></span>Muted = projection</span>
 </div>
 
+{% comment %}
+  The simulator's assumptions, stated on the page. They are house heuristics
+  about how a draft tends to go, not league rules -- nobody should have to read
+  draft_sim.py to know what they are looking at.
+{% endcomment %}
+<details class="sim-legend">
+  <summary>How the projection fills empty picks</summary>
+  <ul>
+    <li>Best player available by ADP; players with no ADP rank go last.</li>
+    <li>Keepers, your locked calls and your sandbox picks are off the board &mdash; nobody drafts them.</li>
+    <li>A pick burned to pay for a keeper is skipped. Nobody moves up; the slot is simply dead.</li>
+    <li>No second QB or TE before Round 9, and no K or DEF until the last two rounds.</li>
+    <li>Nothing here is saved. It is recomputed every time you press the button, and the same
+      inputs always produce the same board.</li>
+  </ul>
+</details>
+
 <p class="note">
   {% if revealed %}
     Filled cells are declared keepers; those slots are skipped in the draft.
@@ -219,9 +250,12 @@
   {% endif %}
 </p>
 
-{% if own_team and not revealed %}
-  <script src="{% static 'league/board.js' %}" defer></script>
-{% endif %}
+{% comment %}
+  Loaded for everyone now, not just managers with a sandbox: the simulate
+  button is on the page whether or not a team is linked, and board.js guards
+  each feature on the element it needs.
+{% endcomment %}
+<script src="{% static 'league/board.js' %}" defer></script>
 
 {% endif %}
 {% endblock %}

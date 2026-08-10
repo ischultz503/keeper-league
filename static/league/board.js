@@ -1,30 +1,65 @@
-/* Draft board keeper sandbox.
+/* Draft board: the keeper sandbox and the ADP simulation.
  *
- * Ticking players POSTs the selection to /api/keeper-preview/, which runs the
- * same keeper_engine code the commissioner's admin uses, and paints the picks
- * that set would burn. Nothing is ever saved -- declarations go to the
- * commissioner by text.
+ * Two features, one file, no framework and no build step.
  *
- * No framework, no build step: one file, plain DOM APIs.
+ *   Sandbox     -- ticking players POSTs the selection to /api/keeper-preview/,
+ *                  which runs the same keeper_engine code the commissioner's
+ *                  admin uses, and paints the picks that set would burn.
+ *   Simulation  -- "Simulate draft" POSTs to /board/simulate/ and paints a
+ *                  projected player into every cell nobody has spoken for.
+ *
+ * Nothing either one does is ever saved. Declarations go to the commissioner
+ * by text; the simulation is recomputed on demand.
  */
 (function () {
   'use strict';
 
-  var sandbox = document.getElementById('sandbox');
-  if (!sandbox) return;                     // no team linked, or keepers revealed
+  var controls = document.getElementById('board-controls');
+  if (!controls) return;                    // not the board page
 
+  var sandbox = document.getElementById('sandbox');   // absent post-reveal
   var MAX_KEEPERS = 3;
-  var url = sandbox.dataset.previewUrl;
-  var resultBox = document.getElementById('sandbox-result');
-  var boxes = Array.prototype.slice.call(sandbox.querySelectorAll('.keeper-choice'));
+  var POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
 
   /* Django's CSRF check is a double-submit: the server compares this token
    * against the csrftoken cookie. fetch() sends the cookie automatically but
    * knows nothing about the token, so we read the one the {% csrf_token %} tag
    * rendered and pass it as a header ourselves. A cross-site page can trigger
    * the cookie but cannot read this value, which is what makes the pair safe. */
-  var tokenField = sandbox.querySelector('[name=csrfmiddlewaretoken]');
+  var tokenField = controls.querySelector('[name=csrfmiddlewaretoken]');
   var csrfToken = tokenField ? tokenField.value : '';
+
+  function post(url, body) {
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRFToken': csrfToken
+      },
+      credentials: 'same-origin',           // send the session + csrf cookies
+      body: JSON.stringify(body)
+    }).then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error(data.error || 'Request failed.');
+        return data;
+      });
+    });
+  }
+
+  function stripPositions(node) {
+    if (!node) return;
+    POSITIONS.forEach(function (pos) { node.classList.remove('pos-bg-' + pos); });
+  }
+
+  function cellFor(pickId) {
+    return document.querySelector('.cell[data-pick-id="' + pickId + '"]');
+  }
+
+  /* --- Sandbox ----------------------------------------------------------- */
+
+  var boxes = sandbox
+    ? Array.prototype.slice.call(sandbox.querySelectorAll('.keeper-choice'))
+    : [];
 
   function selectedIds() {
     return boxes.filter(function (b) { return b.checked; })
@@ -41,20 +76,28 @@
     });
   }
 
-  /* Each selected player gets a colour slot (1-3). The sidebar swatch and the
-   * burned cell both wear it, so the mapping from "player I ticked" to "slot
-   * that goes dark" is visible rather than inferred. */
-  var SLOTS = 3;
+  /* Colour on this board means ONE thing: position. A burned cell wears the
+   * same .pos-bg-* class a filled cell would, so a kept RB is RB-teal here and
+   * everywhere else. What separates a sandbox burn from a locked call is the
+   * ring (dashed vs solid), not the hue.
+   *
+   * The position comes off the checkbox's data-position attribute rather than
+   * from the server's response, so /api/keeper-preview/ stays a pure keeper-math
+   * endpoint with no presentation concerns in it. */
+  var positionByEntry = {};
+  boxes.forEach(function (box) {
+    positionByEntry[box.value] = box.dataset.position || '';
+  });
 
-  function colourIndex(entryId) {
-    var ids = selectedIds();
-    var at = ids.indexOf(entryId);
-    return at === -1 ? 0 : (at % SLOTS) + 1;
+  function posClass(entryId) {
+    var pos = positionByEntry[String(entryId)];
+    return POSITIONS.indexOf(pos) === -1 ? '' : 'pos-bg-' + pos;
   }
 
   function clearBoard() {
     document.querySelectorAll('.cell.burned').forEach(function (cell) {
-      cell.classList.remove('burned', 'burn-1', 'burn-2', 'burn-3');
+      cell.classList.remove('burned');
+      stripPositions(cell);
       cell.removeAttribute('title');
       var tag = cell.querySelector('.burn-tag');
       if (tag) tag.remove();
@@ -64,18 +107,24 @@
   function paintSwatches() {
     boxes.forEach(function (box) {
       var item = box.closest('li');
-      item.classList.remove('picked', 'burn-1', 'burn-2', 'burn-3');
+      var swatch = item.querySelector('.swatch');
+      item.classList.remove('picked');
+      stripPositions(swatch);
       if (box.checked) {
-        item.classList.add('picked', 'burn-' + colourIndex(parseInt(box.value, 10)));
+        item.classList.add('picked');
+        var cls = posClass(box.value);
+        if (swatch && cls) swatch.classList.add(cls);
       }
     });
   }
 
   function paintBurn(burn) {
-    var cell = document.querySelector('.cell[data-pick-id="' + burn.pick_id + '"]');
+    var cell = cellFor(burn.pick_id);
     if (!cell) return;
 
-    cell.classList.add('burned', 'burn-' + colourIndex(burn.entry_id));
+    cell.classList.add('burned');
+    var cls = posClass(burn.entry_id);
+    if (cls) cell.classList.add(cls);
 
     cell.title = burn.via === 'base cost'
       ? burn.player + ' costs Round ' + burn.cost_round
@@ -92,6 +141,8 @@
     }
     cell.appendChild(tag);
   }
+
+  var resultBox = document.getElementById('sandbox-result');
 
   function render(data) {
     clearBoard();
@@ -137,6 +188,10 @@
     var ids = selectedIds();
 
     paintSwatches();
+    // Any projection on screen was computed from the previous selection, so it
+    // is now wrong -- a keeper burns a pick, which moves everyone drafted after
+    // it. Drop it rather than leave a stale board up; the button re-runs it.
+    clearSimulation();
 
     if (ids.length === 0) {
       clearBoard();
@@ -144,25 +199,89 @@
       return;
     }
 
-    fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRFToken': csrfToken
-      },
-      credentials: 'same-origin',           // send the session + csrf cookies
-      body: JSON.stringify({ entry_ids: ids })
-    })
-      .then(function (response) {
-        return response.json().then(function (data) {
-          if (!response.ok) throw new Error(data.error || 'Request failed.');
-          return data;
-        });
-      })
+    post(sandbox.dataset.previewUrl, { entry_ids: ids })
       .then(render)
       .catch(function (err) { showError(err.message); });
   }
 
   boxes.forEach(function (box) { box.addEventListener('change', preview); });
   enforceMax();
+
+  /* --- Simulation -------------------------------------------------------- */
+
+  var simulateBtn = document.getElementById('simulate-btn');
+  var clearBtn = document.getElementById('clear-sim-btn');
+  var errorBox = document.getElementById('sim-error');
+
+  function clearSimulation() {
+    // Only the projection comes off. Locked predictions are server-rendered
+    // and untouched; the sandbox ticks and their burned cells stay exactly as
+    // they were.
+    document.querySelectorAll('.cell.projected').forEach(function (cell) {
+      cell.classList.remove('filled', 'projected');
+      stripPositions(cell);
+      var fill = cell.querySelector('.sim-fill');
+      if (fill) fill.remove();
+    });
+    clearBtn.hidden = true;
+  }
+
+  function paintFill(fill) {
+    var cell = cellFor(fill.pick_id);
+    // A cell already holding a keeper, a locked call or a sandbox burn keeps
+    // it. The server does not project into those, but painting over one would
+    // be the worst kind of bug -- a fact quietly replaced by a guess.
+    if (!cell || cell.classList.contains('locked') || cell.classList.contains('burned')) {
+      return;
+    }
+
+    cell.classList.add('filled', 'projected');
+    if (POSITIONS.indexOf(fill.position) !== -1) {
+      cell.classList.add('pos-bg-' + fill.position);
+    }
+
+    var wrap = document.createElement('span');
+    wrap.className = 'sim-fill';
+
+    var name = document.createElement('span');
+    name.className = 'filled-name';
+    name.textContent = fill.player;
+
+    var sub = document.createElement('span');
+    sub.className = 'filled-sub';
+    sub.textContent = fill.nfl_team ? fill.position + ' – ' + fill.nfl_team : fill.position;
+
+    wrap.appendChild(name);
+    wrap.appendChild(sub);
+    cell.appendChild(wrap);
+  }
+
+  function simulate() {
+    errorBox.hidden = true;
+    simulateBtn.disabled = true;
+    simulateBtn.textContent = 'Simulating…';
+
+    clearSimulation();
+
+    // The sandbox selection goes in the POST body and nowhere else -- see
+    // views.simulate for why it must never reach a URL.
+    post(controls.dataset.simulateUrl, { entry_ids: selectedIds() })
+      .then(function (data) {
+        data.fills.forEach(paintFill);
+        clearBtn.hidden = data.fills.length === 0;
+      })
+      .catch(function (err) {
+        // Say so. A board that simply stayed empty would read as "the
+        // simulation found nothing", which is a different and wrong story.
+        errorBox.textContent = 'Could not simulate the draft: ' + err.message;
+        errorBox.hidden = false;
+      })
+      .then(function () {
+        simulateBtn.disabled = false;
+        simulateBtn.textContent = 'Simulate draft';
+      });
+  }
+
+  simulateBtn.addEventListener('click', simulate);
+  clearBtn.addEventListener('click', clearSimulation);
 })();

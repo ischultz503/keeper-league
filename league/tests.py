@@ -1742,6 +1742,24 @@ class BoardViewTests(TestCase):
         self.assertEqual(cell['keeper'].player.name, 'Rashee Rice')
         self.assertEqual(cell['candidates'], [])
 
+    def test_the_board_offers_the_simulate_control(self):
+        html = self.client.get(reverse('board')).content.decode()
+
+        self.assertIn('id="simulate-btn"', html)
+        self.assertIn(f'data-simulate-url="{reverse("simulate")}"', html)
+        # The sandbox selection must reach the endpoint in a POST body, so the
+        # control carries a CSRF token rather than a link.
+        self.assertIn('csrfmiddlewaretoken', html)
+
+    def test_the_board_script_loads_even_without_a_sandbox(self):
+        """The simulate button is on the page for everyone, sandbox or not."""
+        self.season.keepers_revealed = True
+        self.season.save(update_fields=['keepers_revealed'])
+
+        html = self.client.get(reverse('board')).content.decode()
+        self.assertIn('league/board.js', html)
+        self.assertIn('id="simulate-btn"', html)
+
     def test_the_sandbox_is_hidden_once_keepers_are_revealed(self):
         make_entry(self.roster_season, self.isaac, 'Rashee Rice', 8)
         self.assertContains(self.client.get(reverse('board')), 'id="sandbox"')

@@ -13,11 +13,9 @@
      that names read as floating on it rather than boxed in. */
   --hair: #edeff2;
 
-  /* Three keeper slots, three colours. The sidebar swatch and the burned cell
-     share one, so "this player burns that slot" is visible, not inferred. */
-  --burn-1-bg: #fdefd2;  --burn-1-line: #c5871c;  --burn-1-ink: #6d4408;
-  --burn-2-bg: #ece5fa;  --burn-2-line: #7458bb;  --burn-2-ink: #402a75;
-  --burn-3-bg: #d8eeec;  --burn-3-line: #2c8480;  --burn-3-ink: #17504d;
+  /* Tint behind a ticked sandbox row. Deliberately neutral: on this board,
+     hue is reserved for position and nothing else. */
+  --picked-row: #eef1f4;
 
   /* Position palette, defined once. Each position has a solid colour for
      resolved cells and a desaturated one for projections, so "fact" and
@@ -223,6 +221,49 @@ main.wide { max-width: 1500px; }
 
 .round-toggle:hover { border-color: var(--accent); }
 
+/* Board controls: simulate, clear, round toggle -- one row, right of the title. */
+.board-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.board-btn {
+  padding: 0.35rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.board-btn:hover:not(:disabled) { filter: brightness(1.15); }
+.board-btn:disabled { opacity: 0.55; cursor: default; }
+
+/* The secondary action reads as an outline, so "simulate" stays the one filled
+   button on the page. */
+.board-btn.ghost {
+  background: var(--card);
+  border-color: var(--line);
+  color: var(--accent);
+}
+
+.board-btn.ghost:hover { border-color: var(--accent); }
+
+.sim-error {
+  margin: 0.6rem 0 0;
+  padding: 0.5rem 0.7rem;
+  border-left: 3px solid #b4462f;
+  background: #fdf1ee;
+  color: #7d2f1e;
+  font-size: 0.85rem;
+}
+
 .board-layout {
   display: flex;
   align-items: flex-start;
@@ -362,6 +403,17 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 .cell.projected { color: #cfd6dd; }
 .cell.projected .filled-name { font-weight: 600; }
 
+/* A projected cell has a player in it, so the "who could be kept here" list
+   underneath it would be noise. Clearing the simulation brings it back --
+   nothing is removed from the DOM, only hidden. */
+.cell.projected .cands,
+.cell.projected .more,
+.cell.projected .more-count { display: none; }
+
+/* The fill is appended after the cell's <details>, which carries the padding
+   on its summary, so it pays for its own. */
+.sim-fill { display: block; padding: 0 0.35rem 0.3rem; }
+
 /* A locked/declared call is louder than a projection: full-strength colour
    plus a ring, so the two never read the same at a glance. */
 .cell.locked {
@@ -436,11 +488,17 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 
 .cell.filled .badge { background: rgba(0, 0, 0, 0.25); color: #fff; }
 
-/* Sandbox burn highlight -- classes added and removed by board.js. */
-.cell.burned { box-shadow: inset 0 0 0 2px currentColor; }
-.cell.burn-1 { background: var(--burn-1-line); color: #fff; }
-.cell.burn-2 { background: var(--burn-2-line); color: #fff; }
-.cell.burn-3 { background: var(--burn-3-line); color: #fff; }
+/* Sandbox burn highlight -- classes added and removed by board.js.
+   The background comes from the same .pos-bg-* class every other filled cell
+   uses, so a kept RB is RB-teal here exactly as it is anywhere else. What
+   marks a burn as provisional is the RING, not the hue: dashed means "you are
+   trying this, nothing is saved", against the solid ring of a locked call and
+   the ringless desaturation of a projection. */
+.cell.burned {
+  color: #fff;
+  outline: 2px dashed rgba(255, 255, 255, 0.92);
+  outline-offset: -3px;
+}
 .cell.burned .pick-label { color: rgba(255, 255, 255, 0.8); }
 
 .burn-tag {
@@ -590,6 +648,25 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 
 .legend-projected { background: var(--rb-soft); }
 
+/* Same teal as a real RB cell, wearing the sandbox's dashed ring -- the key
+   has to show the ring, since the ring is the whole distinction. */
+.legend-trying {
+  background: var(--rb);
+  outline: 1.5px dashed #fff;
+  outline-offset: -2px;
+}
+
+/* The simulator's assumptions, folded away until asked for. */
+.sim-legend {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.sim-legend summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.sim-legend ul { margin: 0.4rem 0 0; padding-left: 1.1rem; }
+.sim-legend li { margin: 0.15rem 0; }
+
 
 /* Sandbox sidebar --------------------------------------------------------- */
 
@@ -625,8 +702,9 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 .sandbox-list li.disabled label { cursor: default; }
 .sandbox-list li:not(.disabled):hover { background: #f5f7f8; }
 
-/* The swatch is invisible until picked, then wears the same colour as the
-   cell that player burns. */
+/* The swatch is invisible until picked, then takes that player's POSITION
+   colour -- the same one his burned cell wears on the board. board.js adds the
+   .pos-bg-* class; there is no separate sidebar palette to keep in sync. */
 .swatch {
   flex: 0 0 auto;
   width: 0.55rem;
@@ -635,13 +713,7 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
   background: transparent;
 }
 
-.sandbox-list li.picked { font-weight: 600; }
-.sandbox-list li.picked.burn-1 { background: var(--burn-1-bg); }
-.sandbox-list li.picked.burn-2 { background: var(--burn-2-bg); }
-.sandbox-list li.picked.burn-3 { background: var(--burn-3-bg); }
-.sandbox-list li.picked.burn-1 .swatch { background: var(--burn-1-line); }
-.sandbox-list li.picked.burn-2 .swatch { background: var(--burn-2-line); }
-.sandbox-list li.picked.burn-3 .swatch { background: var(--burn-3-line); }
+.sandbox-list li.picked { font-weight: 600; background: var(--picked-row); }
 
 .sandbox-name {
   flex: 1 1 auto;
