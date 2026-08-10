@@ -562,6 +562,21 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
   text-align: left;
 }
 
+/* The menu hangs below its cell, and .board-scroll clips anything outside it.
+   Absolutely-positioned content does not extend a scroll area, so on the last
+   row the menu is not merely off-screen -- it cannot be scrolled to at all,
+   which reads as "Round 8 cells don't respond to clicks". Flip it upward on the
+   bottom two rows, and inward on the last two columns for the same reason. */
+.board tbody tr:nth-last-child(-n + 2) .pop-menu {
+  top: auto;
+  bottom: calc(100% - 0.2rem);
+}
+
+.board tbody td:nth-last-child(-n + 2) .pop-menu {
+  left: auto;
+  right: 0;
+}
+
 .pop-head {
   margin: 0 0 0.3rem;
   padding: 0 0.2rem;

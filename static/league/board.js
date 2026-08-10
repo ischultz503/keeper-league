@@ -18,6 +18,17 @@
   if (!controls) return;                    // not the board page
 
   var sandbox = document.getElementById('sandbox');   // absent post-reveal
+
+  /* Every element this file touches is looked up HERE, before any of the
+   * behaviour below runs. The two halves call into each other -- restoring the
+   * sandbox on load clears a stale projection -- and a lookup left further down
+   * the file is only hoisted as `undefined`, so that call would throw and take
+   * the rest of the script down with it. */
+  var resultBox = document.getElementById('sandbox-result');
+  var simulateBtn = document.getElementById('simulate-btn');
+  var clearBtn = document.getElementById('clear-sim-btn');
+  var errorBox = document.getElementById('sim-error');
+
   var MAX_KEEPERS = 3;
   var POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
 
@@ -183,8 +194,6 @@
     cell.appendChild(tag);
   }
 
-  var resultBox = document.getElementById('sandbox-result');
-
   function render(data) {
     clearBoard();
     paintSwatches();
@@ -257,10 +266,6 @@
   }
 
   /* --- Simulation -------------------------------------------------------- */
-
-  var simulateBtn = document.getElementById('simulate-btn');
-  var clearBtn = document.getElementById('clear-sim-btn');
-  var errorBox = document.getElementById('sim-error');
 
   function clearSimulation() {
     // Only the projection comes off. Locked predictions are server-rendered
