@@ -156,12 +156,14 @@ def team_detail(request, pk=None):
     # prices the whole roster in a fixed number of queries rather than two per
     # player -- see the note on it in keeper_engine.
     costs = engine.current_costs(entries, season) if season else {}
+    team_count = Team.objects.count()
 
     rows = [
         {
             'entry': entry,
             'cost': costs.get(entry.pk),
             'keeps': costs[entry.pk].times_kept_before if entry.pk in costs else 0,
+            'pick': draft_pick_label(entry, team_count),
         }
         for entry in entries
     ]
@@ -215,7 +217,7 @@ def eligibility(request):
 
     # Sorted in Python rather than SQL: "no ADP sorts last" is the same rule
     # draft_sim uses, and doing it here keeps one definition of it.
-    rows = sorted(
+    ordered = sorted(
         entries,
         key=lambda entry: (
             entry.player.adp is None,
@@ -224,16 +226,44 @@ def eligibility(request):
         ),
     )
 
+    team_count = Team.objects.count()
+    rows = [
+        {'entry': entry, 'pick': draft_pick_label(entry, team_count)}
+        for entry in ordered
+    ]
+
     return render(
         request,
         'league/eligibility.html',
         {
             'season': season,
             'rows': rows,
-            'blocked_count': sum(1 for entry in rows if entry.eligible is False),
-            'pending_count': sum(1 for entry in rows if entry.eligible is None),
+            'blocked_count': sum(1 for entry in ordered if entry.eligible is False),
+            'pending_count': sum(1 for entry in ordered if entry.eligible is None),
         },
     )
+
+
+def draft_pick_label(entry, team_count):
+    """"R5, Pick 7" for a roster entry, or "Undrafted".
+
+    Presentation, not rules: the arithmetic lives in
+    keeper_engine.position_from_overall, and this only decides how to say it.
+    Falls back to the overall number when the two disagree, so bad source data
+    shows up as an odd label rather than being quietly smoothed over.
+    """
+    if entry.draft_round is None:
+        return 'Undrafted'
+
+    position = engine.position_from_overall(
+        entry.overall_pick, entry.draft_round, team_count
+    )
+    if position is None:
+        if entry.overall_pick is None:
+            return f'R{entry.draft_round}'
+        return f'R{entry.draft_round}, #{entry.overall_pick} overall'
+
+    return f'R{entry.draft_round}, Pick {position}'
 
 
 def _own_team(request):

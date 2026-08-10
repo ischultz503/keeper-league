@@ -44,8 +44,7 @@
     <tr>
       <th>Player</th>
       <th>Pos</th>
-      <th class="num">Drafted</th>
-      <th class="num">Overall</th>
+      <th>{% if season %}{{ season.year }}{% endif %} pick</th>
       <th class="num">Times kept</th>
       <th>Eligibility</th>
       <th class="num">Cost to keep</th>
@@ -59,11 +58,11 @@
           {% if row.entry.player.nfl_team %}<span class="subtle">{{ row.entry.player.nfl_team }}</span>{% endif %}
         </td>
         <td><span class="pos pos-{{ row.entry.player.position }}">{{ row.entry.player.position }}</span></td>
-        <td class="num">
-          {% if row.entry.is_undrafted %}<span class="subtle">Undrafted</span>
-          {% else %}Round {{ row.entry.draft_round }}{% endif %}
+        <td>
+          {% if row.entry.is_undrafted %}
+            <span class="subtle">{{ row.pick }}</span>
+          {% else %}{{ row.pick }}{% endif %}
         </td>
-        <td class="num">{% if row.entry.overall_pick %}{{ row.entry.overall_pick }}{% else %}<span class="subtle">&mdash;</span>{% endif %}</td>
         <td class="num">{{ row.keeps }}</td>
         <td>
           {% comment %}
@@ -92,7 +91,7 @@
         </td>
       </tr>
     {% empty %}
-      <tr><td colspan="7">No roster entries for this season.</td></tr>
+      <tr><td colspan="6">No roster entries for this season.</td></tr>
     {% endfor %}
   </tbody>
 </table>

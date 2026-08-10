@@ -214,6 +214,27 @@ def snake_overall(slot, round_number, team_count):
     )
 
 
+def position_from_overall(overall_pick, round_number, team_count):
+    """Where an overall pick number sits within its round, or None.
+
+    The inverse of snake_overall, for reading historical draft results: pick 47
+    of round 5 in a ten-team league was the 7th selection of that round.
+
+    Direction does not enter into it. The snake decides *which slot* picks 7th,
+    but "the 7th pick of round 5" is the 7th either way, so this is arithmetic
+    on the overall number alone.
+
+    Returns None when the numbers disagree -- a round and an overall pick that
+    cannot belong together mean the source data is wrong, and inventing a
+    position from it would hide that.
+    """
+    if overall_pick is None or round_number is None or not team_count:
+        return None
+
+    position = overall_pick - (round_number - 1) * team_count
+    return position if 1 <= position <= team_count else None
+
+
 # --- Pick forfeiture --------------------------------------------------------
 
 

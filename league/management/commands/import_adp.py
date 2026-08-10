@@ -39,6 +39,7 @@ from league.adp import (
     normalize_name,
     normalize_position,
     split_player_and_team,
+    team_code_for_defense,
 )
 from league.models import Player
 
@@ -270,18 +271,26 @@ class Command(BaseCommand):
                 ambiguous.append(f'{name} ({position})')
                 continue
 
+            # The source cannot give a defense its team code -- that column
+            # holds "DST" -- but a defense IS its team, so the nickname supplies
+            # it. Without this every defense sits on the site with a blank NFL
+            # column while the rest of the roster shows one.
+            code_for_team = (team or '').strip()[:4]
+            if code == 'DEF' and not code_for_team:
+                code_for_team = team_code_for_defense(name)
+
             if not found:
                 if code in Player.Position.values:
                     unmatched.append(f'{name} ({position})')
                     creatable.append({
                         'name': name, 'position': code,
-                        'nfl_team': (team or '').strip()[:4], 'adp': adp,
+                        'nfl_team': code_for_team, 'adp': adp,
                     })
                 continue
 
             player = found[0]
             player.adp = adp
-            player.nfl_team = (team or '').strip()[:4]
+            player.nfl_team = code_for_team
             player.adp_updated = now
             matched.append(player)
 

@@ -259,6 +259,27 @@ class KeepHistoryTests(TestCase):
 
 class SnakeOrderTests(SimpleTestCase):
 
+    def test_pick_position_can_be_read_back_off_an_overall_number(self):
+        """The inverse of snake_overall, for reading last year's results."""
+        self.assertEqual(engine.position_from_overall(47, 5, 10), 7)
+        self.assertEqual(engine.position_from_overall(1, 1, 10), 1)
+        self.assertEqual(engine.position_from_overall(20, 2, 10), 10)
+
+    def test_the_inverse_agrees_with_snake_overall_everywhere(self):
+        for round_number in range(1, 17):
+            for slot in range(1, 11):
+                overall = engine.snake_overall(slot, round_number, 10)
+                self.assertEqual(
+                    engine.position_from_overall(overall, round_number, 10),
+                    engine.snake_position_in_round(slot, round_number, 10),
+                )
+
+    def test_numbers_that_cannot_belong_together_give_nothing(self):
+        """Bad source data should look wrong, not be smoothed into a guess."""
+        self.assertIsNone(engine.position_from_overall(47, 2, 10))
+        self.assertIsNone(engine.position_from_overall(None, 5, 10))
+        self.assertIsNone(engine.position_from_overall(47, None, 10))
+
     def test_odd_rounds_run_forwards(self):
         self.assertEqual(engine.snake_overall(slot=3, round_number=1, team_count=10), 3)
         self.assertEqual(engine.snake_overall(slot=1, round_number=3, team_count=10), 21)
@@ -907,6 +928,18 @@ class NameNormalizationTests(SimpleTestCase):
             adp.split_player_and_team("Ka'imi Fairbairn   HOU (8)"),
             ("Ka'imi Fairbairn", 'HOU'),
         )
+
+    def test_a_defense_gets_its_team_code_from_its_nickname(self):
+        """The source cannot supply one -- that column holds "DST"."""
+        self.assertEqual(adp.team_code_for_defense('Philadelphia Eagles'), 'PHI')
+        self.assertEqual(adp.team_code_for_defense('Eagles'), 'PHI')
+        self.assertEqual(adp.team_code_for_defense('San Francisco 49ers'), 'SF')
+        self.assertEqual(adp.team_code_for_defense('Ladd McConkey'), '')
+
+    def test_every_defense_code_fits_the_column(self):
+        for code in adp.DEFENSE_TEAM_CODES.values():
+            self.assertLessEqual(len(code), 4)
+        self.assertEqual(len(adp.DEFENSE_TEAM_CODES), 32)
 
     def test_a_defense_cell_does_not_treat_dst_as_a_team(self):
         """"Houston Texans DST (8)" -- the trailing token is a position marker.
@@ -3155,9 +3188,15 @@ class EligibilityPageTests(TestCase):
 
     def setUp(self):
         self.season = Season.objects.create(year=2025)
+        # A full ten-team league, because the pick label is arithmetic against
+        # the league size: "pick 47" is round 5 of ten teams and nonsense in a
+        # two-team fixture.
+        self.teams = make_teams()
+        self.isaac = self.teams['Isaac']
+        self.marcus = self.teams['Marcus']
         self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
-        self.isaac = Team.objects.create(name='Zimbo Baggins', owner_name='Isaac', user=self.user)
-        self.marcus = Team.objects.create(name='Shedeur for ROTY', owner_name='Marcus')
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
         self.client.force_login(self.user)
 
     def blocked(self, team, name, adp=None, eligible=False, position='RB'):
@@ -3171,7 +3210,21 @@ class EligibilityPageTests(TestCase):
         make_entry(self.season, self.isaac, 'Perfectly Fine', 3)
 
         rows = self.client.get(reverse('eligibility')).context['rows']
-        self.assertEqual([r.player.name for r in rows], ['Hurt Star'])
+        self.assertEqual([r['entry'].player.name for r in rows], ['Hurt Star'])
+
+    def test_each_row_names_the_draft_pick_that_bought_him(self):
+        entry = self.blocked(self.marcus, 'Hurt Star', adp=12.0)
+        entry.overall_pick = 47                  # ten teams: round 5, pick 7
+        entry.save(update_fields=['overall_pick'])
+
+        self.assertContains(self.client.get(reverse('eligibility')), 'R5, Pick 7')
+
+    def test_a_defense_shows_its_nfl_team(self):
+        defense = self.blocked(self.marcus, 'Eagles', adp=123.0, position='DEF')
+        defense.player.nfl_team = adp.team_code_for_defense('Eagles')
+        defense.player.save(update_fields=['nfl_team'])
+
+        self.assertContains(self.client.get(reverse('eligibility')), 'PHI')
 
     def test_pending_players_are_listed_too(self):
         """The engine refuses an unreviewed keeper as firmly as a barred one."""
@@ -3190,7 +3243,7 @@ class EligibilityPageTests(TestCase):
 
         rows = self.client.get(reverse('eligibility')).context['rows']
         self.assertEqual(
-            [r.player.name for r in rows],
+            [r['entry'].player.name for r in rows],
             ['Early Star', 'Late Riser', 'Nobody Knows Him'],
         )
 

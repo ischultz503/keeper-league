@@ -48,6 +48,31 @@ def defense_key(name):
     return tokens[-1] if tokens else ''
 
 
+# A defense IS an NFL team, so its code is derivable from its nickname -- which
+# matters because the source cannot supply it. FantasyPros packs the team code
+# into the player cell, but for a defense that slot holds the literal "DST"
+# (see split_player_and_team), so every defense would otherwise sit on the site
+# with a blank NFL column.
+#
+# Codes follow FantasyPros' spelling, which is what the rest of the imported
+# data uses: JAC not JAX, LV not OAK, WAS not WSH.
+DEFENSE_TEAM_CODES = {
+    'cardinals': 'ARI', 'falcons': 'ATL', 'ravens': 'BAL', 'bills': 'BUF',
+    'panthers': 'CAR', 'bears': 'CHI', 'bengals': 'CIN', 'browns': 'CLE',
+    'cowboys': 'DAL', 'broncos': 'DEN', 'lions': 'DET', 'packers': 'GB',
+    'texans': 'HOU', 'colts': 'IND', 'jaguars': 'JAC', 'chiefs': 'KC',
+    'raiders': 'LV', 'chargers': 'LAC', 'rams': 'LAR', 'dolphins': 'MIA',
+    'vikings': 'MIN', 'patriots': 'NE', 'saints': 'NO', 'giants': 'NYG',
+    'jets': 'NYJ', 'eagles': 'PHI', 'steelers': 'PIT', '49ers': 'SF',
+    'seahawks': 'SEA', 'buccaneers': 'TB', 'titans': 'TEN', 'commanders': 'WAS',
+}
+
+
+def team_code_for_defense(name):
+    """"Philadelphia Eagles" or "Eagles" -> "PHI". Empty if unrecognised."""
+    return DEFENSE_TEAM_CODES.get(defense_key(name), '')
+
+
 # FantasyPros ADP exports pack name, NFL team and bye week into one column:
 #   "Jahmyr Gibbs   DET (6)"        -> name + team + bye
 #   "Houston Texans DST   (8)"      -> the team slot holds DST, not a team code

@@ -28,31 +28,37 @@
       <th>Pos</th>
       <th>NFL</th>
       <th>Rostered by</th>
+      <th>{% if season %}{{ season.year }}{% endif %} pick</th>
       <th>Status</th>
       <th>Note</th>
     </tr>
   </thead>
   <tbody>
-    {% for entry in rows %}
+    {% for row in rows %}
       <tr>
         <td class="num rank">
-          {% if entry.player.adp %}{{ entry.player.adp }}{% else %}<span class="subtle">&mdash;</span>{% endif %}
+          {% if row.entry.player.adp %}{{ row.entry.player.adp }}{% else %}<span class="subtle">&mdash;</span>{% endif %}
         </td>
-        <td>{{ entry.player.name }}</td>
-        <td><span class="pos pos-{{ entry.player.position }}">{{ entry.player.position }}</span></td>
-        <td class="subtle">{{ entry.player.nfl_team|default:"&mdash;" }}</td>
-        <td><a href="{% url 'team_detail' entry.team.pk %}">{{ entry.team.owner_name }}</a></td>
+        <td>{{ row.entry.player.name }}</td>
+        <td><span class="pos pos-{{ row.entry.player.position }}">{{ row.entry.player.position }}</span></td>
+        <td class="subtle">{{ row.entry.player.nfl_team|default:"&mdash;" }}</td>
+        <td><a href="{% url 'team_detail' row.entry.team.pk %}">{{ row.entry.team.owner_name }}</a></td>
         <td>
-          {% if entry.eligible is None %}
+          {% if row.entry.is_undrafted %}
+            <span class="subtle">{{ row.pick }}</span>
+          {% else %}{{ row.pick }}{% endif %}
+        </td>
+        <td>
+          {% if row.entry.eligible is None %}
             <span class="pill pill-pending">Pending review</span>
           {% else %}
             <span class="pill pill-no">Not eligible</span>
           {% endif %}
         </td>
-        <td class="subtle">{{ entry.eligibility_note|default:"" }}</td>
+        <td class="subtle">{{ row.entry.eligibility_note|default:"" }}</td>
       </tr>
     {% empty %}
-      <tr><td colspan="7">Every rostered player is keeper-eligible.</td></tr>
+      <tr><td colspan="8">Every rostered player is keeper-eligible.</td></tr>
     {% endfor %}
   </tbody>
 </table>
