@@ -13,7 +13,6 @@ from django.views.decorators.http import require_POST
 
 from . import draft_sim
 from . import keeper_engine as engine
-from .keeper_engine import resolve_current_cost, times_kept_before
 from .models import (
     DraftPick,
     DraftSlot,
