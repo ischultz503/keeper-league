@@ -275,13 +275,164 @@ main.wide { max-width: 1500px; }
    introduce its own block box and break the row. */
 .board-controls form { display: inline-flex; margin: 0; }
 
-.sim-error {
+.sim-error,
+.sim-done {
   margin: 0.6rem 0 0;
   padding: 0.5rem 0.7rem;
   border-left: 3px solid #b4462f;
   background: #fdf1ee;
   color: #7d2f1e;
   font-size: 0.85rem;
+}
+
+/* Same box, good news. "Your mock draft is finished" is not a failure. */
+.sim-done {
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+
+/* Pick modal (mock draft) -------------------------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 4vh 1rem;
+  background: rgba(16, 20, 25, 0.55);
+}
+
+.modal-backdrop[hidden] { display: none; }
+
+.modal {
+  width: min(34rem, 100%);
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-head h2 { margin: 0; font-size: 1rem; }
+
+.modal-close {
+  border: 0;
+  background: none;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.modal-close:hover { color: var(--ink); }
+
+.modal-tools { padding: 0.7rem 1rem 0.4rem; }
+
+.modal-tools input[type="search"] {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.pick-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.5rem;
+}
+
+.chip {
+  padding: 0.15rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* The active chip is outlined, not filled: the position chips already carry
+   their own hue, and filling them would put two colour languages in one row. */
+.chip.active { border-color: var(--accent); color: var(--accent); }
+
+.modal-hint {
+  margin: 0;
+  padding: 0.2rem 1rem 0.5rem;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.pick-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0 0.5rem;
+  list-style: none;
+}
+
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pick-row:hover { background: var(--accent-soft); }
+
+.pick-name { flex: 1 1 auto; font-weight: 600; }
+
+.pick-team {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.pick-adp {
+  flex: 0 0 auto;
+  min-width: 5rem;
+  text-align: right;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.pick-none { padding: 0.8rem 0.5rem; color: var(--muted); font-size: 0.85rem; }
+
+.modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  border-top: 1px solid var(--line);
 }
 
 .board-layout {
@@ -433,6 +584,19 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 /* The fill is appended after the cell's <details>, which carries the padding
    on its summary, so it pays for its own. */
 .sim-fill { display: block; padding: 0 0.35rem 0.3rem; }
+
+/* A pick I made myself in a mock draft. Full position colour, and the same
+   solid ring a lock wears: on this board hue means position and the ring means
+   certainty, and an explicit choice of mine is certain in a way an ADP guess
+   never is. */
+.cell.mine-pick {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.9);
+  color: #fff;
+}
+
+.cell.mine-pick .cands,
+.cell.mine-pick .more,
+.cell.mine-pick .more-count { display: none; }
 
 /* A locked/declared call is louder than a projection: full-strength colour
    plus a ring, so the two never read the same at a glance. */

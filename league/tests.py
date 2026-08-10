@@ -1962,6 +1962,23 @@ class BoardViewTests(TestCase):
         self.assertIn(f'data-season="{self.season.year}"', html)
         self.assertIn('this browser tab only', html)
 
+    def test_the_board_offers_the_mock_draft_controls(self):
+        html = self.client.get(reverse('board')).content.decode()
+
+        self.assertIn('id="mock-btn"', html)
+        self.assertIn('id="undo-pick-btn"', html)
+        self.assertIn('id="pick-modal"', html)
+
+    def test_an_account_without_a_team_gets_no_mock_controls(self):
+        """There are no picks of your own to make, so there is nothing to open."""
+        self.isaac.user = None
+        self.isaac.save(update_fields=['user'])
+
+        html = self.client.get(reverse('board')).content.decode()
+        self.assertNotIn('id="mock-btn"', html)
+        self.assertNotIn('id="pick-modal"', html)
+        self.assertIn('id="simulate-btn"', html)      # full auto still offered
+
     def test_the_board_script_loads_even_without_a_sandbox(self):
         """The simulate button is on the page for everyone, sandbox or not."""
         self.season.keepers_revealed = True

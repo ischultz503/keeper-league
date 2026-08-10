@@ -28,8 +28,32 @@
   var simulateBtn = document.getElementById('simulate-btn');
   var clearBtn = document.getElementById('clear-sim-btn');
   var errorBox = document.getElementById('sim-error');
+  var mockBtn = document.getElementById('mock-btn');       // absent with no team
+  var undoBtn = document.getElementById('undo-pick-btn');
+  var modal = document.getElementById('pick-modal');
+  var list = document.getElementById('pick-list');
+  var search = document.getElementById('pick-search');
+  var hint = document.getElementById('pick-hint');
+  var countLabel = document.getElementById('pick-count');
+  var title = document.getElementById('pick-modal-title');
+  var filters = document.getElementById('pick-filters');
+
+  /* Mock-draft state, declared here for the same reason: clearing the
+   * simulation reads it, and that can happen during start-up, before the
+   * mock-draft section further down would have assigned anything. */
+  var chosen = [];            // [[pick_id, player_id], ...] in the order I made them
+  var mockActive = false;
+  var pending = null;         // the pick the server is waiting on
+  var poolAvailable = [];     // everything still undrafted, ADP order, for search
+  var filterPos = '';         // '' = the server's suggestions, 'ALL' or a position
+
+  /* Same lifetime and the same reasoning as the sandbox stash: sessionStorage,
+   * keyed by season, dead when the tab closes. A mock draft is a scratchpad
+   * built on a keeper plan we deliberately never write down. */
+  var mockKey = 'keeper-mock-' + (sandbox ? sandbox.dataset.season || '' : '');
 
   var MAX_KEEPERS = 3;
+  var SEARCH_RESULT_LIMIT = 60;
   var POSITIONS = ['QB', 'RB', 'WR', 'TE', 'K', 'DEF'];
 
   /* Django's CSRF check is a double-submit: the server compares this token
@@ -239,10 +263,18 @@
 
     saveSelection();
     paintSwatches();
+
     // Any projection on screen was computed from the previous selection, so it
     // is now wrong -- a keeper burns a pick, which moves everyone drafted after
-    // it. Drop it rather than leave a stale board up; the button re-runs it.
-    clearSimulation();
+    // it. A mock draft is worse than stale: a newly burned cell may be one I
+    // had already drafted at, which the server would rightly refuse. So this
+    // one clears without asking, and says so rather than vanishing quietly.
+    var hadPicks = mockActive && chosen.length;
+    clearSimulation(false);
+    if (hadPicks) {
+      showProblem('Keeper selection changed, so the mock draft was reset — ' +
+                  'your picks depend on which cells are burned.');
+    }
 
     if (ids.length === 0) {
       clearBoard();
@@ -267,17 +299,44 @@
 
   /* --- Simulation -------------------------------------------------------- */
 
-  function clearSimulation() {
+  function wipeFills() {
     // Only the projection comes off. Locked predictions are server-rendered
     // and untouched; the sandbox ticks and their burned cells stay exactly as
     // they were.
-    document.querySelectorAll('.cell.projected').forEach(function (cell) {
-      cell.classList.remove('filled', 'projected');
+    document.querySelectorAll('.cell.projected, .cell.mine-pick').forEach(function (cell) {
+      cell.classList.remove('filled', 'projected', 'mine-pick');
       stripPositions(cell);
       var fill = cell.querySelector('.sim-fill');
       if (fill) fill.remove();
     });
     clearBtn.hidden = true;
+  }
+
+  function resetMock() {
+    mockActive = false;
+    chosen = [];
+    pending = null;
+    poolAvailable = [];
+    saveMock();
+    closeModal();
+    updateMockButtons();
+  }
+
+  /* Clear the projection. Returns false if the user backed out.
+   *
+   * Mock picks are the one thing here that took real effort to produce, so
+   * throwing them away asks first -- unlike the auto projection, which is one
+   * button press to rebuild. */
+  function clearSimulation(ask) {
+    if (ask && mockActive && chosen.length) {
+      var message = 'Clear the mock draft too? Your ' + chosen.length +
+        ' pick(s) would have to be made again.';
+      if (!window.confirm(message)) return false;
+    }
+
+    wipeFills();
+    if (mockActive) resetMock();
+    return true;
   }
 
   function paintFill(fill) {
@@ -289,7 +348,10 @@
       return;
     }
 
-    cell.classList.add('filled', 'projected');
+    // Hue is position; the ring is certainty. A pick I made myself is a
+    // decision, not a projection, so it gets the full colour and the same solid
+    // ring a lock wears -- while auto-simmed cells stay desaturated and ringless.
+    cell.classList.add('filled', fill.source === 'manual' ? 'mine-pick' : 'projected');
     if (POSITIONS.indexOf(fill.position) !== -1) {
       cell.classList.add('pos-bg-' + fill.position);
     }
@@ -310,12 +372,22 @@
     cell.appendChild(wrap);
   }
 
+  function showProblem(message) {
+    // Say so. A board that simply stayed empty would read as "the simulation
+    // found nothing", which is a different and wrong story.
+    errorBox.textContent = message;
+    errorBox.hidden = false;
+  }
+
   function simulate() {
+    // Full auto is a different mode, so it takes the mock draft with it -- but
+    // only with permission.
+    if (!clearSimulation(true)) return;
+
     errorBox.hidden = true;
+    errorBox.className = 'sim-error';
     simulateBtn.disabled = true;
     simulateBtn.textContent = 'Simulating…';
-
-    clearSimulation();
 
     // The sandbox selection goes in the POST body and nowhere else -- see
     // views.simulate for why it must never reach a URL.
@@ -325,10 +397,7 @@
         clearBtn.hidden = data.fills.length === 0;
       })
       .catch(function (err) {
-        // Say so. A board that simply stayed empty would read as "the
-        // simulation found nothing", which is a different and wrong story.
-        errorBox.textContent = 'Could not simulate the draft: ' + err.message;
-        errorBox.hidden = false;
+        showProblem('Could not simulate the draft: ' + err.message);
       })
       .then(function () {
         simulateBtn.disabled = false;
@@ -337,7 +406,234 @@
   }
 
   simulateBtn.addEventListener('click', simulate);
-  clearBtn.addEventListener('click', clearSimulation);
+  clearBtn.addEventListener('click', function () { clearSimulation(true); });
+
+  /* --- Mock draft --------------------------------------------------------- */
+
+  /* "I make my picks": the same projection, paused at each of my cells.
+   *
+   * The server holds no cursor and saves nothing, so `chosen` below IS the
+   * draft. Every step posts the whole list and the server replays from scratch;
+   * that is why undo is `chosen.pop()` and nothing else. See views.simulate.
+   *
+   * Everything in here is presentation and bookkeeping. No pick logic: which
+   * players are legal, who the other teams take and where the draft pauses are
+   * all draft_sim's answers, arriving in the step response. */
+  function saveMock() {
+    try {
+      sessionStorage.setItem(mockKey, JSON.stringify({ active: mockActive, chosen: chosen }));
+    } catch (e) { /* private mode: the draft just does not survive a reload */ }
+  }
+
+  function restoreMock() {
+    try {
+      var saved = JSON.parse(sessionStorage.getItem(mockKey) || 'null');
+      if (saved && saved.active && Array.isArray(saved.chosen)) {
+        chosen = saved.chosen;
+        mockActive = true;
+      }
+    } catch (e) { /* ignore a corrupt stash rather than break the board */ }
+  }
+
+  function manualMap() {
+    var map = {};
+    chosen.forEach(function (pair) { map[pair[0]] = pair[1]; });
+    return map;
+  }
+
+  function updateMockButtons() {
+    if (!mockBtn) return;
+    mockBtn.textContent = mockActive ? 'Continue draft' : 'Mock draft — I pick';
+    undoBtn.hidden = !(mockActive && chosen.length);
+    undoBtn.textContent = 'Undo my last pick';
+  }
+
+  /* One step: post what I have chosen, paint what comes back, and either open
+   * the modal on my next pick or report the draft finished. */
+  function step() {
+    errorBox.hidden = true;
+    errorBox.className = 'sim-error';
+    mockBtn.disabled = true;
+    undoBtn.disabled = true;
+
+    return post(controls.dataset.simulateUrl, {
+      mock: true,
+      manual_picks: manualMap(),
+      entry_ids: selectedIds()
+    })
+      .then(function (data) {
+        wipeFills();
+        data.fills.forEach(paintFill);
+        clearBtn.hidden = data.fills.length === 0;
+
+        pending = data.your_pick;
+        poolAvailable = data.available || [];
+
+        if (pending) {
+          openModal();
+        } else {
+          closeModal();
+          showProblem('Mock draft complete — every one of your picks is made.');
+          errorBox.className = 'sim-done';
+        }
+        updateMockButtons();
+      })
+      .catch(function (err) {
+        showProblem('Could not run the mock draft: ' + err.message);
+      })
+      .then(function () {
+        mockBtn.disabled = false;
+        undoBtn.disabled = false;
+      });
+  }
+
+  function startMock() {
+    mockActive = true;
+    errorBox.className = 'sim-error';
+    saveMock();
+    updateMockButtons();
+    step();
+  }
+
+  function undoLastPick() {
+    if (!chosen.length) return;
+    chosen.pop();               // the entire undo: replay does the rest
+    saveMock();
+    step();
+  }
+
+  function choose(playerId) {
+    if (!pending) return;
+    chosen.push([pending.pick_id, playerId]);
+    saveMock();
+    step();
+  }
+
+  /* --- the pick modal --- */
+
+  function openModal() {
+    // The label is "3.4" -- round, then position within the round. The header
+    // reads better spelled out than as a dotted pick number.
+    var inRound = String(pending.label).split('.')[1] || '';
+    title.textContent = 'Round ' + pending.round + ', pick ' + inRound + ' — your pick';
+    filterPos = '';
+    search.value = '';
+    setActiveChip('');
+    renderList();
+    modal.hidden = false;
+    search.focus();
+  }
+
+  function closeModal() {
+    // Deliberately does NOT abandon the draft: the sim stays paused here and
+    // "Continue draft" reopens exactly this pick.
+    if (modal) modal.hidden = true;
+  }
+
+  function setActiveChip(pos) {
+    Array.prototype.forEach.call(filters.querySelectorAll('.chip'), function (chip) {
+      chip.classList.toggle('active', chip.dataset.pos === pos);
+    });
+  }
+
+  function visiblePlayers() {
+    var term = search.value.trim().toLowerCase();
+
+    // No search and no filter: show exactly what the server suggested, caps and
+    // all. Touching either widens the list to the whole available pool, on
+    // purpose -- the caps are advice about my own team, not a rule.
+    if (!term && filterPos === '') return pending.suggestions;
+
+    return poolAvailable.filter(function (player) {
+      if (filterPos && filterPos !== 'ALL' && player.position !== filterPos) return false;
+      return !term || player.name.toLowerCase().indexOf(term) !== -1;
+    }).slice(0, SEARCH_RESULT_LIMIT);
+  }
+
+  function renderList() {
+    var players = visiblePlayers();
+    var suggesting = !search.value.trim() && filterPos === '';
+
+    hint.textContent = suggesting
+      ? 'Best available that fits your roster. Search or filter to see everyone.'
+      : 'Everything still available — the positional caps do not apply to your own picks.';
+
+    countLabel.textContent = players.length + ' shown of ' + poolAvailable.length + ' available';
+
+    list.textContent = '';
+    if (!players.length) {
+      var none = document.createElement('li');
+      none.className = 'pick-none';
+      none.textContent = 'Nobody matches that.';
+      list.appendChild(none);
+      return;
+    }
+
+    players.forEach(function (player) {
+      var row = document.createElement('li');
+
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'pick-row';
+      button.addEventListener('click', function () { choose(player.id); });
+
+      var pos = document.createElement('span');
+      pos.className = 'pos pos-' + player.position;
+      pos.textContent = player.position;
+
+      var name = document.createElement('span');
+      name.className = 'pick-name';
+      name.textContent = player.name;
+
+      var team = document.createElement('span');
+      team.className = 'pick-team';
+      team.textContent = player.nfl_team || '';
+
+      var adp = document.createElement('span');
+      adp.className = 'pick-adp';
+      adp.textContent = player.adp === null ? 'no ADP' : 'ADP ' + player.adp;
+
+      button.appendChild(pos);
+      button.appendChild(name);
+      button.appendChild(team);
+      button.appendChild(adp);
+      row.appendChild(button);
+      list.appendChild(row);
+    });
+  }
+
+  if (mockBtn) {
+    mockBtn.addEventListener('click', function () {
+      if (mockActive) { step(); } else { startMock(); }
+    });
+    undoBtn.addEventListener('click', undoLastPick);
+
+    document.getElementById('pick-modal-close').addEventListener('click', closeModal);
+    document.getElementById('auto-pick-btn').addEventListener('click', function () {
+      // Best available under the caps -- the server already worked that out, so
+      // this is the first suggestion and no second opinion in the browser.
+      if (pending && pending.suggestions.length) choose(pending.suggestions[0].id);
+    });
+
+    search.addEventListener('input', renderList);
+    filters.addEventListener('click', function (event) {
+      var chip = event.target.closest('.chip');
+      if (!chip) return;
+      filterPos = chip.dataset.pos;
+      setActiveChip(filterPos);
+      renderList();
+    });
+
+    modal.addEventListener('click', function (event) {
+      if (event.target === modal) closeModal();     // click the backdrop
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && !modal.hidden) closeModal();
+    });
+
+    restoreMock();
+    updateMockButtons();
+  }
 
   /* --- Reset ------------------------------------------------------------- */
 
@@ -363,6 +659,7 @@
       // straight back on.
       boxes.forEach(function (box) { box.checked = false; });
       saveSelection();
+      resetMock();
     });
   }
 })();

@@ -39,6 +39,11 @@
     {% endcomment %}
     {% csrf_token %}
     <button type="button" class="board-btn" id="simulate-btn">Simulate draft</button>
+    {% if own_team %}
+      {# Mock mode needs picks of your own to make, so it needs a team. #}
+      <button type="button" class="board-btn" id="mock-btn">Mock draft &mdash; I pick</button>
+      <button type="button" class="board-btn ghost" id="undo-pick-btn" hidden>Undo my last pick</button>
+    {% endif %}
     <button type="button" class="board-btn ghost" id="clear-sim-btn" hidden>Clear simulation</button>
 
     {% if not revealed %}
@@ -241,7 +246,7 @@
   <span><span class="legend-key pos-bg-K"></span>K</span>
   <span><span class="legend-key pos-bg-DEF"></span>DEF</span>
   <span class="subtle">&middot;</span>
-  <span>Solid = declared or locked</span>
+  <span>Solid = declared, locked, or your own mock pick</span>
   <span><span class="legend-key legend-trying"></span>Dashed = your sandbox, not saved</span>
   <span><span class="legend-key legend-projected"></span>Muted = projection</span>
 </div>
@@ -260,6 +265,9 @@
     <li>No second QB or TE before Round 9, and no K or DEF until the last two rounds.</li>
     <li>Nothing here is saved. It is recomputed every time you press the button, and the same
       inputs always produce the same board.</li>
+    <li><strong>Mock draft</strong> runs the same projection but stops at each of your picks
+      so you choose. The suggested five respect the caps above; search and the position
+      filters do not &mdash; your own team is yours to ruin.</li>
   </ul>
 </details>
 
@@ -277,6 +285,47 @@
     that manager knows. See the <a href="{% url 'rules' %}">rules</a>, section 3.
   {% endif %}
 </p>
+
+{% if own_team %}
+  {% comment %}
+    The mock-draft pick chooser. Rendered empty and filled by board.js from the
+    step response: the available pool arrives with each step, so search and
+    position filtering happen here in the browser with no further requests --
+    and no pick logic, which stays in draft_sim. The suggestion list is the
+    server's, caps and all.
+  {% endcomment %}
+  <div class="modal-backdrop" id="pick-modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pick-modal-title">
+      <div class="modal-head">
+        <h2 id="pick-modal-title">Your pick</h2>
+        <button type="button" class="modal-close" id="pick-modal-close" aria-label="Close">&times;</button>
+      </div>
+
+      <div class="modal-tools">
+        <input type="search" id="pick-search" placeholder="Search available players"
+               autocomplete="off" aria-label="Search available players">
+        <div class="pick-filters" id="pick-filters">
+          <button type="button" class="chip active" data-pos="">Suggested</button>
+          <button type="button" class="chip" data-pos="ALL">All</button>
+          <button type="button" class="chip pos-QB" data-pos="QB">QB</button>
+          <button type="button" class="chip pos-RB" data-pos="RB">RB</button>
+          <button type="button" class="chip pos-WR" data-pos="WR">WR</button>
+          <button type="button" class="chip pos-TE" data-pos="TE">TE</button>
+          <button type="button" class="chip pos-K" data-pos="K">K</button>
+          <button type="button" class="chip pos-DEF" data-pos="DEF">DEF</button>
+        </div>
+      </div>
+
+      <p class="modal-hint" id="pick-hint"></p>
+      <ul class="pick-list" id="pick-list"></ul>
+
+      <div class="modal-foot">
+        <button type="button" class="board-btn" id="auto-pick-btn">Auto-pick best available</button>
+        <span class="subtle" id="pick-count"></span>
+      </div>
+    </div>
+  </div>
+{% endif %}
 
 {% comment %}
   Loaded for everyone now, not just managers with a sandbox: the simulate
