@@ -3,7 +3,7 @@ notebooks/
 .venv/
 .env
 
-
+docs/claude_code_prompts/
 # Python
 __pycache__/
 *.py[cod]
