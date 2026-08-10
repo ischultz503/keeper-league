@@ -1486,6 +1486,202 @@ class DraftSimTests(SimpleTestCase):
         self.assertEqual(result[0].player_id, 2)
 
 
+class MockDraftTests(SimpleTestCase):
+    """run_sim's pause / inject / resume behaviour.
+
+    The design is stateless: every step replays the whole draft from the same
+    inputs plus one more manual pick. These tests are what hold that honest --
+    if replay were not deterministic, "resume" would silently rewrite the
+    already-drafted part of the board.
+    """
+
+    def setUp(self):
+        self.slots = sim_slots(3)
+        self.me = 2                       # team 2 drafts second in odd rounds
+
+    def pool(self, count=12, start=1):
+        return sim_players([(n, 'RB', float(n)) for n in range(start, start + count)])
+
+    def step(self, rounds=3, pool=None, manual=None, stop=True, **kwargs):
+        return draft_sim.run_sim(
+            slots=self.slots,
+            picks=sim_picks(self.slots, rounds),
+            pool=self.pool() if pool is None else pool,
+            rounds=rounds,
+            user_team_id=self.me,
+            manual_picks=manual or {},
+            stop_at_next_user_pick=stop,
+            **kwargs,
+        )
+
+    # -- stopping -----------------------------------------------------------
+
+    def test_it_stops_at_my_first_pick(self):
+        run = self.step()
+
+        self.assertFalse(run.done)
+        self.assertEqual(run.paused_at.team_id, self.me)
+        self.assertEqual(run.paused_at.round, 1)
+        self.assertEqual(run.paused_at.overall, 2)
+        # Only the picks before mine are decided; everything after depends on
+        # who I take.
+        self.assertEqual([c.overall for c in run.cells], [1])
+
+    def test_the_pause_offers_cap_respecting_suggestions(self):
+        pool = sim_players([
+            (1, 'QB', 1.0), (2, 'QB', 2.0), (3, 'RB', 3.0), (4, 'RB', 4.0), (5, 'K', 0.5),
+        ])
+        run = self.step(rounds=6, pool=pool, roster_positions={self.me: {'QB'}})
+
+        offered = [p.pk for p in run.paused_at.suggestions]
+        self.assertNotIn(1, offered)      # already have a QB, and it is round 1
+        self.assertNotIn(5, offered)      # kicker, nowhere near the last rounds
+        self.assertEqual(offered[0], 3)
+
+    def test_suggestions_are_capped_in_number(self):
+        run = self.step(suggestion_count=2)
+        self.assertEqual(len(run.paused_at.suggestions), 2)
+
+    def test_a_burned_cell_of_mine_is_never_offered(self):
+        """There is no pick to make there -- it paid for a keeper."""
+        picks = sim_picks(self.slots, 3)
+        mine_first = next(p for p in picks if p.round == 1 and p.original_team_id == self.me)
+
+        run = draft_sim.run_sim(
+            slots=self.slots, picks=picks, pool=self.pool(), rounds=3,
+            burned_pick_ids={mine_first.pk},
+            user_team_id=self.me, stop_at_next_user_pick=True,
+        )
+
+        self.assertNotEqual(run.paused_at.pick_id, mine_first.pk)
+        self.assertEqual(run.paused_at.round, 2)     # my next real pick
+        burned = next(c for c in run.cells if c.pick_id == mine_first.pk)
+        self.assertEqual(burned.source, draft_sim.SOURCE_BURNED)
+
+    # -- injecting ----------------------------------------------------------
+
+    def test_my_choice_is_injected_and_the_replay_moves_on(self):
+        first = self.step()
+        mine = first.paused_at.pick_id
+
+        second = self.step(manual={mine: 7})          # deliberately not the BPA
+
+        chosen = next(c for c in second.cells if c.pick_id == mine)
+        self.assertEqual(chosen.player_id, 7)
+        self.assertEqual(chosen.source, draft_sim.SOURCE_MANUAL)
+        # ...and it now pauses at my *next* pick, in round 2.
+        self.assertEqual(second.paused_at.round, 2)
+
+    def test_a_player_i_took_is_gone_for_everyone_after_me(self):
+        first = self.step()
+        run = self.step(manual={first.paused_at.pick_id: 7})
+
+        drafted = [c.player_id for c in run.cells if c.player_id is not None]
+        self.assertEqual(drafted.count(7), 1)
+        self.assertNotIn(7, [p.pk for p in run.available])
+
+    def test_taking_an_already_drafted_player_is_refused(self):
+        first = self.step()
+        gone = first.cells[0].player_id          # team 1 just took him
+
+        with self.assertRaises(draft_sim.SimError):
+            self.step(manual={first.paused_at.pick_id: gone})
+
+    def test_a_player_outside_the_pool_is_refused(self):
+        first = self.step()
+        with self.assertRaises(draft_sim.SimError):
+            self.step(manual={first.paused_at.pick_id: 9999})
+
+    def test_a_pick_that_is_not_mine_is_refused(self):
+        """Mock drafting is for my own team only -- out of scope by design."""
+        picks = sim_picks(self.slots, 3)
+        theirs = next(p for p in picks if p.round == 1 and p.original_team_id == 1)
+
+        with self.assertRaises(draft_sim.SimError):
+            draft_sim.run_sim(
+                slots=self.slots, picks=picks, pool=self.pool(), rounds=3,
+                user_team_id=self.me, manual_picks={theirs.pk: 5},
+                stop_at_next_user_pick=True,
+            )
+
+    # -- resuming -----------------------------------------------------------
+
+    def test_replaying_never_rewrites_what_was_already_decided(self):
+        """The heart of the stateless design: earlier cells must not move."""
+        run = self.step()
+        chosen = {}
+
+        while not run.done:
+            before = {c.pick_id: c.player_id for c in run.cells}
+            chosen[run.paused_at.pick_id] = run.paused_at.suggestions[0].pk
+            run = self.step(manual=chosen)
+            after = {c.pick_id: c.player_id for c in run.cells}
+            for pick_id, player_id in before.items():
+                self.assertEqual(after[pick_id], player_id)
+
+        self.assertTrue(run.done)
+
+    def test_undo_returns_exactly_the_previous_board(self):
+        run = self.step()
+        first_pick = run.paused_at.pick_id
+        one = self.step(manual={first_pick: 7})
+        two = self.step(manual={first_pick: 7, one.paused_at.pick_id: 8})
+
+        undone = self.step(manual={first_pick: 7})
+        self.assertEqual(
+            [(c.pick_id, c.player_id) for c in undone.cells],
+            [(c.pick_id, c.player_id) for c in one.cells],
+        )
+        # Back to waiting on the pick that `two` had answered.
+        self.assertEqual(undone.paused_at.pick_id, one.paused_at.pick_id)
+        self.assertIn(8, [p.pk for p in undone.available])
+        self.assertNotIn(8, [c.player_id for c in undone.cells])
+        self.assertFalse(two.done)
+
+    def test_choosing_every_pick_runs_the_draft_to_completion(self):
+        run = self.step()
+        chosen = {}
+        while not run.done:
+            chosen[run.paused_at.pick_id] = run.paused_at.suggestions[0].pk
+            run = self.step(manual=chosen)
+
+        self.assertIsNone(run.paused_at)
+        self.assertEqual(len(run.cells), 9)
+        self.assertEqual(len(chosen), 3)             # one per round, my slot
+        mine = [c for c in run.cells if c.team_id == self.me]
+        self.assertTrue(all(c.source == draft_sim.SOURCE_MANUAL for c in mine))
+
+    def test_snake_order_holds_across_the_pauses(self):
+        run = self.step()
+        chosen = {}
+        while not run.done:
+            chosen[run.paused_at.pick_id] = run.paused_at.suggestions[0].pk
+            run = self.step(manual=chosen)
+
+        self.assertEqual([c.overall for c in run.cells], list(range(1, 10)))
+        picking = {c.overall: c.team_id for c in run.cells}
+        self.assertEqual([picking[4], picking[5], picking[6]], [3, 2, 1])
+
+    def test_i_may_draft_against_the_caps(self):
+        """The caps shape suggestions. They do not police my own choices."""
+        # Six rounds, so the kicker is not legal for the sim until Round 5.
+        pool = sim_players([(1, 'RB', 1.0), (2, 'K', 2.0), (3, 'RB', 3.0), (4, 'RB', 4.0)])
+        run = self.step(rounds=6, pool=pool)
+
+        self.assertNotIn(2, [p.pk for p in run.paused_at.suggestions])
+        taken = self.step(rounds=6, pool=pool, manual={run.paused_at.pick_id: 2})
+
+        kicker = next(c for c in taken.cells if c.player_id == 2)
+        self.assertEqual(kicker.source, draft_sim.SOURCE_MANUAL)
+
+    def test_full_auto_ignores_the_pause_entirely(self):
+        run = self.step(stop=False)
+
+        self.assertTrue(run.done)
+        self.assertEqual(len(run.cells), 9)
+        self.assertTrue(all(c.source != draft_sim.SOURCE_MANUAL for c in run.cells))
+
+
 class DraftSimModelTests(TestCase):
     """The same module, driven by real rows -- the shape the view will use."""
 
@@ -2429,11 +2625,222 @@ class SimulateApiTests(TestCase):
     def test_response_shape_matches_what_board_js_reads(self):
         data = self.simulate().json()
 
-        self.assertEqual(set(data), {'fills', 'burned'})
+        self.assertEqual(set(data), {'fills', 'burned', 'done', 'your_pick'})
         self.assertEqual(
             set(data['fills'][0]),
             {'pick_id', 'player', 'position', 'nfl_team', 'source'},
         )
+        # Full auto never pauses, so the pool is not shipped.
+        self.assertTrue(data['done'])
+        self.assertIsNone(data['your_pick'])
+
+
+class MockDraftApiTests(TestCase):
+    """POST /board/simulate/ with mock=true -- the step endpoint."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.roster_season = Season.objects.create(year=2025)
+        cls.season = Season.objects.create(year=2026)
+        cls.teams = make_teams()
+        make_draft(cls.season, cls.teams)
+        cls.isaac = cls.teams['Isaac']
+        cls.marcus = cls.teams['Marcus']
+
+        for n in range(1, 200):
+            Player.objects.create(name=f'Free Agent {n}', position='RB', adp=float(n))
+        make_entry(cls.roster_season, cls.teams['Luke'], 'Rostered Guy', 5)
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+        self.client.force_login(self.user)
+
+    def step(self, manual=None, entries=(), mock=True):
+        return self.client.post(
+            reverse('simulate'),
+            data=json.dumps({
+                'mock': mock,
+                'manual_picks': manual or {},
+                'entry_ids': [e.pk for e in entries],
+            }),
+            content_type='application/json',
+        )
+
+    def my_pick(self, round_number):
+        return DraftPick.objects.get(
+            season=self.season, round=round_number, original_team=self.isaac
+        )
+
+    # -- access control -----------------------------------------------------
+
+    def test_get_is_not_allowed(self):
+        self.assertEqual(self.client.get(reverse('simulate')).status_code, 405)
+
+    def test_anonymous_users_are_rejected(self):
+        self.client.logout()
+        response = self.step()
+        self.assertIn(response.status_code, (302, 403))
+
+    def test_a_user_without_a_team_cannot_mock_draft(self):
+        """There is no 'my picks' without a team, and none may be named."""
+        self.client.force_login(
+            get_user_model().objects.create_user('commish', password='test-pass-1234')
+        )
+        self.assertEqual(self.step().status_code, 403)
+
+    def test_the_team_is_derived_from_the_session(self):
+        """Nothing in the body names a team, so nobody can draft for a rival."""
+        data = self.step().json()
+        self.assertEqual(data['your_pick']['pick_id'], self.my_pick(1).pk)
+
+    # -- stepping -----------------------------------------------------------
+
+    def test_the_first_step_stops_at_my_first_pick(self):
+        data = self.step().json()
+
+        self.assertFalse(data['done'])
+        self.assertEqual(data['your_pick']['round'], 1)
+        # Isaac drafts third, so two chalk picks are on the board already.
+        self.assertEqual(len(data['fills']), 2)
+        self.assertEqual(data['your_pick']['label'], '1.3')
+
+    def test_the_step_ships_suggestions_and_the_available_pool(self):
+        data = self.step().json()
+
+        self.assertEqual(len(data['your_pick']['suggestions']), 5)
+        self.assertEqual(
+            set(data['your_pick']['suggestions'][0]),
+            {'id', 'name', 'position', 'nfl_team', 'adp'},
+        )
+        # 199 free agents + the one rostered player, less the two already gone.
+        self.assertEqual(data['available_count'], 198)
+        self.assertEqual(data['available'][0]['name'], 'Free Agent 3')
+
+    def test_my_choice_is_marked_manual_and_the_sim_moves_on(self):
+        mine = self.my_pick(1)
+        pick_me = Player.objects.get(name='Free Agent 50')
+
+        data = self.step(manual={str(mine.pk): pick_me.pk}).json()
+
+        chosen = next(f for f in data['fills'] if f['pick_id'] == mine.pk)
+        self.assertEqual(chosen['player'], 'Free Agent 50')
+        self.assertEqual(chosen['source'], draft_sim.SOURCE_MANUAL)
+        self.assertEqual(data['your_pick']['round'], 2)
+
+    def test_undo_is_just_a_shorter_dict(self):
+        mine = self.my_pick(1)
+        with_pick = self.step(manual={str(mine.pk): 50}).json()
+        without = self.step().json()
+
+        self.assertEqual(without['your_pick']['pick_id'], mine.pk)
+        self.assertNotIn(mine.pk, [f['pick_id'] for f in without['fills']])
+        self.assertNotEqual(with_pick['your_pick']['pick_id'], mine.pk)
+
+    def test_choosing_every_pick_finishes_the_draft(self):
+        manual = {}
+        data = self.step().json()
+        while not data['done']:
+            manual[str(data['your_pick']['pick_id'])] = data['your_pick']['suggestions'][0]['id']
+            data = self.step(manual=manual).json()
+
+        self.assertEqual(len(data['fills']), 10 * ROUNDS)
+        self.assertIsNone(data['your_pick'])
+        self.assertNotIn('available', data)
+        self.assertEqual(len(manual), ROUNDS)
+
+    # -- refusals -----------------------------------------------------------
+
+    def test_drafting_an_already_taken_player_is_refused(self):
+        data = self.step().json()
+        gone = data['fills'][0]['pick_id']
+        taken_name = data['fills'][0]['player']
+        taken = Player.objects.get(name=taken_name)
+
+        response = self.step(manual={str(self.my_pick(1).pk): taken.pk})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('already been drafted', response.json()['error'])
+        self.assertTrue(gone)
+
+    def test_drafting_at_another_teams_pick_is_refused(self):
+        theirs = DraftPick.objects.get(
+            season=self.season, round=1, original_team=self.marcus
+        )
+        response = self.step(manual={str(theirs.pk): 50})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('not yours', response.json()['error'])
+
+    def test_a_cell_burned_by_my_own_keeper_cannot_be_drafted_at(self):
+        entry = make_entry(self.roster_season, self.isaac, 'Kept Guy', 3)
+        mine_r3 = self.my_pick(3)
+
+        response = self.step(manual={str(mine_r3.pk): 50}, entries=[entry])
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('not yours', response.json()['error'])
+
+    def test_the_sim_skips_over_my_burned_cell(self):
+        entry = make_entry(self.roster_season, self.isaac, 'Kept Guy', 3)
+        manual = {}
+        data = self.step(entries=[entry]).json()
+        stops = []
+        while not data['done']:
+            stops.append(data['your_pick']['round'])
+            manual[str(data['your_pick']['pick_id'])] = data['your_pick']['suggestions'][0]['id']
+            data = self.step(manual=manual, entries=[entry]).json()
+
+        self.assertNotIn(3, stops)
+        self.assertIn(self.my_pick(3).pk, data['burned'])
+
+    def test_a_player_who_does_not_exist_is_refused(self):
+        response = self.step(manual={str(self.my_pick(1).pk): 999999})
+        self.assertEqual(response.status_code, 400)
+
+    def test_suggestions_respect_the_caps_but_the_pool_does_not(self):
+        """The caps shape the default list; search may reach past them."""
+        Player.objects.create(name='Only Kicker', position='K', adp=0.1)
+        data = self.step().json()
+
+        offered = [s['name'] for s in data['your_pick']['suggestions']]
+        self.assertNotIn('Only Kicker', offered)
+        # ...but he is in the pool the modal searches, because drafting him is
+        # my prerogative.
+        self.assertIn('Only Kicker', [p['name'] for p in data['available']])
+
+    def test_mock_mode_never_writes(self):
+        before = (KeeperPrediction.objects.count(), KeeperSelection.objects.count(),
+                  DraftPick.objects.filter(forfeited=True).count())
+        self.step(manual={str(self.my_pick(1).pk): 50})
+        after = (KeeperPrediction.objects.count(), KeeperSelection.objects.count(),
+                 DraftPick.objects.filter(forfeited=True).count())
+
+        self.assertEqual(before, after)
+
+    def test_a_traded_pick_is_labelled_with_the_original_owners_slot(self):
+        """Marcus's Round 4 to Isaac: the cell stays in Marcus's column."""
+        traded = DraftPick.objects.get(
+            season=self.season, round=4, original_team=self.marcus
+        )
+        traded.current_team = self.isaac
+        traded.save(update_fields=['current_team'])
+
+        manual = {}
+        data = self.step().json()
+        labels = []
+        while not data['done']:
+            labels.append(data['your_pick']['label'])
+            manual[str(data['your_pick']['pick_id'])] = data['your_pick']['suggestions'][0]['id']
+            data = self.step(manual=manual).json()
+
+        # Isaac now picks twice in Round 4, and the two cells are far apart:
+        # Round 4 is even so it runs backwards, putting Marcus's slot-10 pick
+        # first in the round and Isaac's own slot-3 pick eighth.
+        self.assertIn('4.1', labels)
+        self.assertIn('4.8', labels)
+        # His Round 3 is unaffected: odd round, slot 3, third pick.
+        self.assertIn('3.3', labels)
+        self.assertEqual(len(labels), ROUNDS + 1)      # one extra, from the trade
 
 
 class StandingsTests(TestCase):

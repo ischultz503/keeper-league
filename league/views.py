@@ -558,6 +558,13 @@ def simulate(request):
     try:
         payload = json.loads(request.body or '{}')
         entry_ids = [int(value) for value in payload.get('entry_ids', [])]
+        # {pick_id: player_id} of the picks the user has made so far in a mock
+        # draft. Sent whole on every step: there is no server-side cursor, so
+        # this dict IS the state, and replaying it is what "resume" means.
+        manual_picks = {
+            int(key): int(value) for key, value in (payload.get('manual_picks') or {}).items()
+        }
+        mock = bool(payload.get('mock'))
     except (ValueError, TypeError, AttributeError):
         return JsonResponse({'error': 'Malformed request.'}, status=400)
 
@@ -567,8 +574,8 @@ def simulate(request):
         )
 
     # A commissioner account with no team of its own can still simulate -- it
-    # just has no sandbox to contribute.
-    if team is None and entry_ids:
+    # just has no sandbox to contribute, and no picks to make.
+    if team is None and (entry_ids or mock or manual_picks):
         return JsonResponse({'error': 'No team is linked to your login.'}, status=403)
 
     season = keeper_season()
@@ -596,29 +603,98 @@ def simulate(request):
     picks = list(DraftPick.objects.filter(season=season))
     pool = list(Player.objects.exclude(pk__in=taken_player_ids))
 
-    fills = draft_sim.simulate_draft(
-        slots=slots,
-        picks=picks,
-        pool=pool,
-        burned_pick_ids=burned_pick_ids,
-        roster_positions=roster_positions,
-    )
+    # The team whose picks pause the replay is derived from the session, never
+    # sent by the client -- the same rule as everywhere else on this board. You
+    # can only mock-draft for yourself.
+    try:
+        run = draft_sim.run_sim(
+            slots=slots,
+            picks=picks,
+            pool=pool,
+            burned_pick_ids=burned_pick_ids,
+            roster_positions=roster_positions,
+            user_team_id=team.pk if (mock and team is not None) else None,
+            manual_picks=manual_picks if mock else None,
+            stop_at_next_user_pick=mock,
+        )
+    except draft_sim.SimError as problem:
+        # An impossible choice: a player someone else already took, or a cell
+        # that is not this manager's. Refused rather than silently dropped.
+        return JsonResponse({'error': str(problem)}, status=400)
 
     players = {player.pk: player for player in pool}
 
-    return JsonResponse({
+    response = {
         'fills': [
-            {
-                'pick_id': cell.pick_id,
-                'player': players[cell.player_id].name,
-                'position': players[cell.player_id].position,
-                'nfl_team': players[cell.player_id].nfl_team,
-                'source': cell.source,
-            }
-            for cell in fills if cell.player_id is not None
+            _fill_json(cell, players[cell.player_id])
+            for cell in run.cells if cell.player_id is not None
         ],
         'burned': sorted(burned_pick_ids),
-    })
+        'done': run.done,
+        'your_pick': None,
+    }
+
+    if run.paused_at is not None:
+        pending = run.paused_at
+        response['your_pick'] = {
+            'pick_id': pending.pick_id,
+            'round': pending.round,
+            'overall': pending.overall,
+            # "3.4" -- the same label the cell carries on the board. It follows
+            # the pick's ORIGINAL team, not mine: a pick acquired by trade keeps
+            # the other manager's slot and column (rules section 7), so labelling
+            # it from my own slot would name a cell somewhere else entirely.
+            'label': _pick_label(pending.pick_id, picks, slots),
+            'suggestions': [_player_json(player) for player in pending.suggestions],
+        }
+        # The whole remaining pool goes with the step, once, rather than a
+        # second endpoint answering search-as-you-type. Two reasons: it is
+        # small (a few hundred rows, ~15KB of JSON), and a search endpoint
+        # would have to replay the entire draft again just to know what is
+        # still available. Filtering a list the client already holds is instant
+        # and adds no pick logic to the browser -- the caps that build
+        # `suggestions` still come from draft_sim.
+        available = run.available[:MAX_POOL_PAYLOAD]
+        response['available'] = [_player_json(player) for player in available]
+        response['available_count'] = len(run.available)
+
+    return JsonResponse(response)
+
+
+# A bound on the step payload. The real pool is ~350 players, so this never
+# bites today; it exists so a future full-NFL import cannot turn one step into
+# a megabyte of JSON.
+MAX_POOL_PAYLOAD = 500
+
+
+def _pick_label(pick_id, picks, slots):
+    """The "3.4" label for a pick, from rows already in memory."""
+    pick = next((p for p in picks if p.pk == pick_id), None)
+    slot = next((s.slot for s in slots if pick and s.team_id == pick.original_team_id), None)
+    if pick is None or slot is None:
+        return ''
+    position = engine.snake_position_in_round(slot, pick.round, len(slots))
+    return f'{pick.round}.{position}'
+
+
+def _player_json(player):
+    return {
+        'id': player.pk,
+        'name': player.name,
+        'position': player.position,
+        'nfl_team': player.nfl_team,
+        'adp': player.adp,
+    }
+
+
+def _fill_json(cell, player):
+    return {
+        'pick_id': cell.pick_id,
+        'player': player.name,
+        'position': player.position,
+        'nfl_team': player.nfl_team,
+        'source': cell.source,
+    }
 
 
 def _keeper_state(user, team, season, sandbox_entries):
