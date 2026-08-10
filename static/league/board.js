@@ -511,6 +511,100 @@
 
   /* --- the pick modal --- */
 
+  /* --- where the panel sits --- */
+
+  /* Auto-anchored under the cell being drafted, so the rounds above it -- the
+   * ones that just happened, and the ones you are reacting to -- stay readable.
+   * Dragging is remembered as an OFFSET from that anchor rather than as an
+   * absolute position: the next pick is a different cell, often elsewhere on
+   * the page, and a remembered absolute position would strand the panel
+   * off-screen. Keeping the offset preserves "a bit to the right and lower",
+   * which is what someone who moved it actually meant. */
+  var dragOffset = { x: 0, y: 0 };
+  var ANCHOR_GAP = 10;          // px between the cell and the panel
+  var EDGE_MARGIN = 8;          // keep this clear of the viewport edges
+
+  function placePanel() {
+    var cell = cellFor(pending.pick_id);
+    var moved = dragOffset.x || dragOffset.y;
+
+    if (!cell) {
+      // The pick is in a round the board is not currently showing. Park the
+      // panel in view rather than at coordinates for a cell that is not there.
+      modal.classList.add('detached');
+      modal.style.left = (window.scrollX + EDGE_MARGIN) + 'px';
+      modal.style.top = (window.scrollY + 80) + 'px';
+      return;
+    }
+
+    cell.classList.add('on-the-clock');
+
+    // Page coordinates, so the panel scrolls with the board it is pinned to.
+    var box = cell.getBoundingClientRect();
+    var left = box.left + window.scrollX + dragOffset.x;
+    var top = box.bottom + window.scrollY + ANCHOR_GAP + dragOffset.y;
+
+    // Clamp horizontally: the rightmost columns would otherwise put half the
+    // panel past the edge of the window.
+    var maxLeft = window.scrollX + document.documentElement.clientWidth
+      - modal.offsetWidth - EDGE_MARGIN;
+    left = Math.max(window.scrollX + EDGE_MARGIN, Math.min(left, maxLeft));
+
+    modal.style.left = left + 'px';
+    modal.style.top = top + 'px';
+
+    // The little tail points at the cell, so keep it over the cell even after
+    // the clamp has slid the panel sideways.
+    var tail = box.left + window.scrollX - left + (box.width / 2);
+    modal.style.setProperty('--tail-x', Math.max(12, Math.min(tail, modal.offsetWidth - 20)) + 'px');
+    modal.classList.toggle('detached', Boolean(moved));
+
+    // Put the cell in the middle of the screen, which leaves the rounds above
+    // it visible and room below for the panel.
+    cell.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  function clearOnTheClock() {
+    document.querySelectorAll('.cell.on-the-clock').forEach(function (cell) {
+      cell.classList.remove('on-the-clock');
+    });
+  }
+
+  function startDrag(event) {
+    if (event.target.closest('.modal-close')) return;
+
+    var box = modal.getBoundingClientRect();
+    var grabX = event.clientX - box.left;
+    var grabY = event.clientY - box.top;
+    var anchorLeft = parseFloat(modal.style.left) - dragOffset.x;
+    var anchorTop = parseFloat(modal.style.top) - dragOffset.y;
+
+    modal.classList.add('dragging');
+    document.body.classList.add('dragging-panel');
+
+    function move(moveEvent) {
+      var left = moveEvent.clientX - grabX + window.scrollX;
+      var top = moveEvent.clientY - grabY + window.scrollY;
+      modal.style.left = left + 'px';
+      modal.style.top = top + 'px';
+      // Store where this ended up RELATIVE to the auto-anchor, so the next
+      // pick opens in the same relative spot.
+      dragOffset = { x: left - anchorLeft, y: top - anchorTop };
+    }
+
+    function stop() {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', stop);
+      modal.classList.remove('dragging');
+      document.body.classList.remove('dragging-panel');
+      modal.classList.add('detached');
+    }
+
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', stop);
+    event.preventDefault();
+  }
+
   function openModal() {
     // The label is "3.4" -- round, then position within the round. The header
     // reads better spelled out than as a dotted pick number.
@@ -520,14 +614,18 @@
     search.value = '';
     setActiveChip('');
     renderList();
+
+    clearOnTheClock();
     modal.hidden = false;
-    search.focus();
+    placePanel();               // needs to be visible first, to have a width
+    search.focus({ preventScroll: true });
   }
 
   function closeModal() {
     // Deliberately does NOT abandon the draft: the sim stays paused here and
     // "Continue draft" reopens exactly this pick.
     if (modal) modal.hidden = true;
+    clearOnTheClock();
   }
 
   function setActiveChip(pos) {
@@ -557,6 +655,12 @@
     hint.textContent = suggesting
       ? 'Best available that fits your roster. Search or filter to see everyone.'
       : 'Everything still available — the positional caps do not apply to your own picks.';
+
+    // The board shows rounds 1-8 by default, so a later pick has no cell to
+    // sit under. Say so, rather than leaving the panel floating unexplained.
+    if (!cellFor(pending.pick_id)) {
+      hint.textContent += ' This pick is in a hidden round — "Show all rounds" puts it on the board.';
+    }
 
     countLabel.textContent = players.length + ' shown of ' + poolAvailable.length + ' available';
 
@@ -624,12 +728,23 @@
       renderList();
     });
 
-    modal.addEventListener('click', function (event) {
-      if (event.target === modal) closeModal();     // click the backdrop
-    });
+    document.getElementById('pick-modal-drag').addEventListener('mousedown', startDrag);
+
     document.addEventListener('keydown', function (event) {
       if (event.key === 'Escape' && !modal.hidden) closeModal();
     });
+
+    // Reflow if the window changes size while a pick is open -- the clamp
+    // against the right edge depends on the viewport width.
+    window.addEventListener('resize', function () {
+      if (!modal.hidden && pending) placePanel();
+    });
+
+    /* Out of the page flow entirely. The panel is positioned in page
+     * coordinates, and living inside <main> would make it a hostage to any
+     * ancestor that grows a transform or its own positioning context -- and
+     * .board-scroll, right next to it, already clips its overflow. */
+    document.body.appendChild(modal);
 
     restoreMock();
     updateMockButtons();

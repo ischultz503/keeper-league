@@ -294,9 +294,16 @@
     and no pick logic, which stays in draft_sim. The suggestion list is the
     server's, caps and all.
   {% endcomment %}
-  <div class="modal-backdrop" id="pick-modal" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pick-modal-title">
-      <div class="modal-head">
+  <div class="pick-panel" id="pick-modal" hidden
+       role="dialog" aria-labelledby="pick-modal-title">
+    <div class="modal">
+      {% comment %}
+        The header doubles as the drag handle. Deliberately NOT aria-modal and
+        with no dimming backdrop: the whole point of this panel is that you can
+        still read the board around it -- who went before you, what your rivals
+        have left -- while you decide.
+      {% endcomment %}
+      <div class="modal-head" id="pick-modal-drag">
         <h2 id="pick-modal-title">Your pick</h2>
         <button type="button" class="modal-close" id="pick-modal-close" aria-label="Close">&times;</button>
       </div>
