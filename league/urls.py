@@ -11,11 +11,16 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    path('', views.league_overview, name='league_overview'),
+    # The board is the front page: it is what the site is for, and every other
+    # page is something you consult while looking at it.
+    path('', views.board, name='board'),
+    path('standings/', views.league_overview, name='league_overview'),
+    # Two routes, one view. `teams/` with no pk means "mine", and is also what
+    # the team picker submits to with ?team=N -- a plain GET form, no JS.
+    path('teams/', views.team_detail, name='team_switch'),
     path('teams/<int:pk>/', views.team_detail, name='team_detail'),
     path('my-team/', views.my_team, name='my_team'),
-    path('my-keepers/', views.my_keepers, name='my_keepers'),
-    path('board/', views.board, name='board'),
+    path('eligibility/', views.eligibility, name='eligibility'),
     path('rules/', views.rules, name='rules'),
     # JSON endpoint for the board's keeper sandbox. Namespaced under /api/ to
     # keep it obviously separate from the HTML pages.

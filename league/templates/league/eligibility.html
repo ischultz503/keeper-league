@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Eligibility{% endblock %}
+
+{% block content %}
+<h1>Who cannot be kept</h1>
+<p class="subtle">
+  {% if season %}From the {{ season.year }} rosters &middot; {% endif %}
+  {{ blocked_count }} ineligible{% if pending_count %}, {{ pending_count }} awaiting review{% endif %}
+  &middot; best ADP first
+</p>
+
+<div class="callout">
+  A player is keeper-eligible only if he <strong>started 4 or more weeks</strong>
+  or was <strong>rostered for 9 or more weeks</strong> &mdash; time on IR counts
+  as rostered (<a href="{% url 'rules' %}">rules</a>, section 5).
+  {% if pending_count %}
+    Players awaiting review are listed here too: until the commissioner confirms
+    one, the engine refuses him exactly as it refuses an ineligible player.
+  {% endif %}
+</div>
+
+<table class="data">
+  <thead>
+    <tr>
+      <th class="num">ADP</th>
+      <th>Player</th>
+      <th>Pos</th>
+      <th>NFL</th>
+      <th>Rostered by</th>
+      <th>Status</th>
+      <th>Note</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for entry in rows %}
+      <tr>
+        <td class="num rank">
+          {% if entry.player.adp %}{{ entry.player.adp }}{% else %}<span class="subtle">&mdash;</span>{% endif %}
+        </td>
+        <td>{{ entry.player.name }}</td>
+        <td><span class="pos pos-{{ entry.player.position }}">{{ entry.player.position }}</span></td>
+        <td class="subtle">{{ entry.player.nfl_team|default:"&mdash;" }}</td>
+        <td><a href="{% url 'team_detail' entry.team.pk %}">{{ entry.team.owner_name }}</a></td>
+        <td>
+          {% if entry.eligible is None %}
+            <span class="pill pill-pending">Pending review</span>
+          {% else %}
+            <span class="pill pill-no">Not eligible</span>
+          {% endif %}
+        </td>
+        <td class="subtle">{{ entry.eligibility_note|default:"" }}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="7">Every rostered player is keeper-eligible.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p class="note">
+  Eligibility is entered by the commissioner from Yahoo's weekly data
+  (<code>python manage.py import_eligibility</code>). These players are left off
+  the draft board's keeper candidates entirely &mdash; nobody can keep them, so
+  showing them as options would be misleading.
+</p>
+{% endblock %}

@@ -3046,8 +3046,8 @@ class ViewAccessTests(TestCase):
 
     def test_anonymous_user_is_redirected_to_login(self):
         targets = [
-            ('league_overview', []), ('my_team', []), ('my_keepers', []),
-            ('rules', []), ('team_detail', [self.team.pk]),
+            ('league_overview', []), ('my_team', []), ('team_switch', []),
+            ('eligibility', []), ('rules', []), ('team_detail', [self.team.pk]),
         ]
         for name, args in targets:
             with self.subTest(view=name):
@@ -3079,21 +3079,23 @@ class ViewAccessTests(TestCase):
         self.assertContains(response, 'Ladd McConkey')
         self.assertContains(response, 'Round 3')
 
-    def test_my_keepers_shows_cost_and_eligibility(self):
+    def test_the_team_page_shows_cost_and_eligibility(self):
+        """The columns the old My Keepers page carried, now on every team."""
         player = Player.objects.create(name='Rashee Rice', position=Player.Position.WR)
         RosterEntry.objects.create(
             season=self.roster_season, team=self.team, player=player,
             draft_round=8, eligible=True,
         )
         self.client.force_login(self.user)
-        response = self.client.get(reverse('my_keepers'))
+        response = self.client.get(reverse('team_detail', args=[self.team.pk]))
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Rashee Rice')
         self.assertContains(response, 'Round 8')
         self.assertContains(response, 'Eligible')
+        self.assertContains(response, 'Times kept')
 
-    def test_my_keepers_marks_unreviewed_players_pending(self):
+    def test_the_team_page_marks_unreviewed_players_pending(self):
         player = Player.objects.create(name='Unknown Guy', position=Player.Position.RB)
         # eligible defaults to True, so "pending" now has to be set deliberately.
         RosterEntry.objects.create(
@@ -3101,7 +3103,109 @@ class ViewAccessTests(TestCase):
             draft_round=5, eligible=None,
         )
         self.client.force_login(self.user)
-        self.assertContains(self.client.get(reverse('my_keepers')), 'Pending review')
+        self.assertContains(
+            self.client.get(reverse('team_detail', args=[self.team.pk])), 'Pending review'
+        )
+
+    def test_bare_teams_url_shows_my_own_team(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse('team_switch'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['team'], self.team)
+        self.assertTrue(response.context['is_own'])
+
+    def test_the_picker_switches_teams_by_query_parameter(self):
+        """What the dropdown submits -- a plain GET form, no JavaScript."""
+        rival = Team.objects.create(name='Shedeur for ROTY', owner_name='Marcus')
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('team_switch'), {'team': rival.pk})
+
+        self.assertEqual(response.context['team'], rival)
+        self.assertFalse(response.context['is_own'])
+        self.assertContains(response, 'id="team-select"')
+
+    def test_a_nonsense_team_parameter_falls_back_to_my_own(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse('team_switch'), {'team': 'drop-table'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['team'], self.team)
+
+    def test_the_board_is_the_front_page(self):
+        self.client.force_login(self.user)
+        self.assertEqual(reverse('board'), '/')
+
+    def test_the_navigation_is_in_the_agreed_order(self):
+        self.client.force_login(self.user)
+        html = self.client.get(reverse('rules')).content.decode()
+        nav = html[html.index('<nav>'):html.index('</nav>')]
+
+        order = ['Draft Board', 'Rules', 'My Team', 'Standings', 'Eligibility']
+        found = [label for label in order if label in nav]
+        self.assertEqual(found, order)
+        self.assertEqual(sorted(nav.index(label) for label in order),
+                         [nav.index(label) for label in order])
+        self.assertNotIn('My Keepers', nav)
+
+
+class EligibilityPageTests(TestCase):
+    """The league-wide list of players nobody can keep."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2025)
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = Team.objects.create(name='Zimbo Baggins', owner_name='Isaac', user=self.user)
+        self.marcus = Team.objects.create(name='Shedeur for ROTY', owner_name='Marcus')
+        self.client.force_login(self.user)
+
+    def blocked(self, team, name, adp=None, eligible=False, position='RB'):
+        entry = make_entry(self.season, team, name, 5, eligible=eligible, position=position)
+        entry.player.adp = adp
+        entry.player.save(update_fields=['adp'])
+        return entry
+
+    def test_only_players_who_cannot_be_kept_are_listed(self):
+        self.blocked(self.marcus, 'Hurt Star', adp=12.0)
+        make_entry(self.season, self.isaac, 'Perfectly Fine', 3)
+
+        rows = self.client.get(reverse('eligibility')).context['rows']
+        self.assertEqual([r.player.name for r in rows], ['Hurt Star'])
+
+    def test_pending_players_are_listed_too(self):
+        """The engine refuses an unreviewed keeper as firmly as a barred one."""
+        pending = self.blocked(self.isaac, 'Unreviewed Guy', adp=40.0)
+        pending.eligible = None
+        pending.save(update_fields=['eligible'])
+
+        response = self.client.get(reverse('eligibility'))
+        self.assertEqual(response.context['pending_count'], 1)
+        self.assertContains(response, 'Pending review')
+
+    def test_rows_are_sorted_by_adp_with_the_unranked_last(self):
+        self.blocked(self.marcus, 'Late Riser', adp=80.0)
+        self.blocked(self.isaac, 'Nobody Knows Him')          # no ADP
+        self.blocked(self.marcus, 'Early Star', adp=4.0)
+
+        rows = self.client.get(reverse('eligibility')).context['rows']
+        self.assertEqual(
+            [r.player.name for r in rows],
+            ['Early Star', 'Late Riser', 'Nobody Knows Him'],
+        )
+
+    def test_each_row_names_the_team_holding_him(self):
+        self.blocked(self.marcus, 'Hurt Star', adp=12.0)
+        html = self.client.get(reverse('eligibility')).content.decode()
+
+        self.assertIn('Marcus', html)
+        self.assertIn(reverse('team_detail', args=[self.marcus.pk]), html)
+
+    def test_an_all_eligible_league_says_so(self):
+        make_entry(self.season, self.isaac, 'Perfectly Fine', 3)
+        self.assertContains(
+            self.client.get(reverse('eligibility')), 'Every rostered player is keeper-eligible.'
+        )
 
     def test_rules_page_renders_the_markdown_doc(self):
         self.client.force_login(self.user)

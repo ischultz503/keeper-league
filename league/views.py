@@ -115,20 +115,69 @@ def league_overview(request):
 
 
 @login_required
-def team_detail(request, pk):
-    """One team's full roster for the latest season, with base keeper costs."""
-    team = get_object_or_404(Team, pk=pk)
-    season = latest_roster_season()
+def team_detail(request, pk=None):
+    """One team's roster, its keeper costs, and a picker for the other nine.
+
+    Reached three ways, all landing here: `/teams/3/` is a permalink,
+    `/teams/?team=3` is what the dropdown submits (a plain GET form, so the
+    picker needs no JavaScript), and bare `/teams/` is your own team, which is
+    where the "My Team" tab points.
+
+    This page absorbed the old My Keepers page. They listed the same roster,
+    and one of them showed the cost that actually applies -- so the escalated
+    cost, the keep count and eligibility live here now, for every team. None of
+    it is private: it all derives from last season's public draft.
+    """
+    if pk is None and request.GET.get('team'):
+        try:
+            pk = int(request.GET['team'])
+        except ValueError:
+            pk = None                     # a hand-edited query, not a crash
+
+    if pk is None:
+        team = _own_team(request)
+        if team is None:
+            # A commissioner account with no team of its own has nothing to
+            # default to; the standings are a sensible landing spot.
+            return redirect('league_overview')
+    else:
+        team = get_object_or_404(Team, pk=pk)
+
+    roster_season = latest_roster_season()
+    season = keeper_season()
 
     # select_related follows the player FK in the same SQL query, so rendering
     # 16 rows costs 1 query instead of 17. Sort order (draft round ascending,
     # undrafted last, then name) comes from RosterEntry.Meta.ordering.
-    entries = team.roster_entries.filter(season=season).select_related('player')
+    entries = list(
+        team.roster_entries.filter(season=roster_season).select_related('player', 'season')
+    )
+
+    # The engine does the thinking; the view only assembles rows. current_costs
+    # prices the whole roster in a fixed number of queries rather than two per
+    # player -- see the note on it in keeper_engine.
+    costs = engine.current_costs(entries, season) if season else {}
+
+    rows = [
+        {
+            'entry': entry,
+            'cost': costs.get(entry.pk),
+            'keeps': costs[entry.pk].times_kept_before if entry.pk in costs else 0,
+        }
+        for entry in entries
+    ]
 
     return render(
         request,
         'league/team_detail.html',
-        {'team': team, 'season': season, 'entries': entries},
+        {
+            'team': team,
+            'season': roster_season,
+            'keeper_season': season,
+            'rows': rows,
+            'teams': Team.objects.all(),
+            'is_own': _own_team(request) == team,
+        },
     )
 
 
@@ -143,44 +192,47 @@ def my_team(request):
 
 
 @login_required
-def my_keepers(request):
-    """Read-only keeper planning for the logged-in manager.
+def eligibility(request):
+    """Every player who cannot be kept this year, best first.
 
-    Declarations are NOT made here -- managers text the commissioner (rules
-    section 1). This page exists so they know what each player would cost
-    before they do.
+    "Cannot be kept" is two states, not one: explicitly ineligible, and not yet
+    reviewed. They are listed together because the engine treats them the same
+    way -- validate_keeper_set refuses a keeper whose eligibility is None just
+    as firmly as one marked False (rules section 5). Splitting them into
+    separate pages would suggest a difference that does not exist at the
+    declaration deadline.
+
+    Sorted by ADP so the names that hurt appear first; a player nobody drafts
+    being ineligible is not news.
     """
-    team = _own_team(request)
-    if team is None:
-        return redirect('league_overview')
-
-    roster_season = latest_roster_season()
-    season = keeper_season()
+    season = latest_roster_season()
 
     entries = (
-        team.roster_entries
-        .filter(season=roster_season)
-        .select_related('player', 'season')
+        RosterEntry.objects
+        .filter(season=season)
+        .exclude(eligible=True)
+        .select_related('player', 'team')
     )
 
-    # The engine does the thinking; the view only assembles rows for the
-    # template. No keeper rules live in this file or in the template.
-    rows = []
-    for entry in entries:
-        rows.append({
-            'entry': entry,
-            'cost': resolve_current_cost(entry, season) if season else None,
-            'keeps': times_kept_before(entry.player, season) if season else 0,
-        })
+    # Sorted in Python rather than SQL: "no ADP sorts last" is the same rule
+    # draft_sim uses, and doing it here keeps one definition of it.
+    rows = sorted(
+        entries,
+        key=lambda entry: (
+            entry.player.adp is None,
+            entry.player.adp if entry.player.adp is not None else 0.0,
+            entry.player.name,
+        ),
+    )
 
     return render(
         request,
-        'league/my_keepers.html',
+        'league/eligibility.html',
         {
-            'team': team,
-            'roster_season': roster_season,
             'season': season,
             'rows': rows,
+            'blocked_count': sum(1 for entry in rows if entry.eligible is False),
+            'pending_count': sum(1 for entry in rows if entry.eligible is None),
         },
     )
 

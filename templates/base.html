@@ -8,15 +8,16 @@
 </head>
 <body>
   <header class="site-header">
-    <a class="brand" href="{% url 'league_overview' %}">Keeper League</a>
+    <a class="brand" href="{% url 'board' %}">Keeper League</a>
     <nav>
       {% if user.is_authenticated %}
+        <a href="{% url 'board' %}">Draft Board</a>
+        <a href="{% url 'rules' %}">Rules</a>
+        {# Bare /teams/ is your own; the picker on the page reaches the rest. #}
+        <a href="{% url 'team_switch' %}">My Team</a>
         {# The year comes from league.context_processors.nav, not a literal. #}
         <a href="{% url 'league_overview' %}">{% if nav_roster_season %}{{ nav_roster_season.year }} {% endif %}Standings</a>
-        <a href="{% url 'board' %}">Draft Board</a>
-        <a href="{% url 'my_team' %}">My Team</a>
-        <a href="{% url 'my_keepers' %}">My Keepers</a>
-        <a href="{% url 'rules' %}">Rules</a>
+        <a href="{% url 'eligibility' %}">Eligibility</a>
         {% if user.is_staff %}<a href="{% url 'admin:index' %}">Admin</a>{% endif %}
         <span class="who">{{ user.username }}</span>
         {# Django 5+ requires POST for logout, so this is a form, not a link. #}

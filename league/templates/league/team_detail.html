@@ -3,59 +3,106 @@
 {% block title %}{{ team.name }}{% endblock %}
 
 {% block content %}
-<h1>{{ team.name }}</h1>
-<p class="subtle">{{ team.owner_name }}{% if season %} &middot; {{ season.year }} roster{% endif %}</p>
+<div class="board-head">
+  <div>
+    <h1>{{ team.name }}</h1>
+    <p class="subtle">
+      {{ team.owner_name }}{% if season %} &middot; {{ season.year }} roster{% endif %}
+      {% if is_own %}&middot; <strong>your team</strong>{% endif %}
+    </p>
+  </div>
+
+  {% comment %}
+    A plain GET form, so switching teams works with JavaScript switched off and
+    the result is a shareable URL. The submit button is not decoration: without
+    JS there is nothing else to fire the navigation.
+  {% endcomment %}
+  <form class="team-picker" method="get" action="{% url 'team_switch' %}">
+    <label for="team-select">View team</label>
+    <select name="team" id="team-select">
+      {% for option in teams %}
+        <option value="{{ option.pk }}"{% if option.pk == team.pk %} selected{% endif %}>
+          {{ option.name }} ({{ option.owner_name }})
+        </option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="board-btn ghost">Go</button>
+  </form>
+</div>
+
+{% if is_own %}
+  <div class="callout">
+    <strong>This page does not declare anything.</strong>
+    Keepers are declared by texting the commissioner privately, due 7 days
+    before the draft. Use the <a href="{% url 'board' %}">draft board</a> to see
+    which picks a keeper set would burn.
+  </div>
+{% endif %}
 
 <table class="data">
   <thead>
     <tr>
       <th>Player</th>
       <th>Pos</th>
-      <th class="num">Draft round</th>
-      <th class="num">Overall pick</th>
+      <th class="num">Drafted</th>
+      <th class="num">Overall</th>
+      <th class="num">Times kept</th>
       <th>Eligibility</th>
-      <th class="num">Base keeper cost</th>
+      <th class="num">Cost to keep</th>
     </tr>
   </thead>
   <tbody>
-    {% for entry in entries %}
-      <tr{% if entry.is_undrafted %} class="undrafted"{% endif %}>
-        <td>{{ entry.player.name }}</td>
-        <td><span class="pos pos-{{ entry.player.position }}">{{ entry.player.position }}</span></td>
-        <td class="num">{% if entry.is_undrafted %}<span class="subtle">Undrafted</span>{% else %}{{ entry.draft_round }}{% endif %}</td>
-        <td class="num">{% if entry.overall_pick %}{{ entry.overall_pick }}{% else %}<span class="subtle">&mdash;</span>{% endif %}</td>
+    {% for row in rows %}
+      <tr{% if row.entry.is_undrafted %} class="undrafted"{% endif %}>
+        <td>
+          {{ row.entry.player.name }}
+          {% if row.entry.player.nfl_team %}<span class="subtle">{{ row.entry.player.nfl_team }}</span>{% endif %}
+        </td>
+        <td><span class="pos pos-{{ row.entry.player.position }}">{{ row.entry.player.position }}</span></td>
+        <td class="num">
+          {% if row.entry.is_undrafted %}<span class="subtle">Undrafted</span>
+          {% else %}Round {{ row.entry.draft_round }}{% endif %}
+        </td>
+        <td class="num">{% if row.entry.overall_pick %}{{ row.entry.overall_pick }}{% else %}<span class="subtle">&mdash;</span>{% endif %}</td>
+        <td class="num">{{ row.keeps }}</td>
         <td>
           {% comment %}
-            Same three-state treatment as My Keepers: test None first, because
-            "not yet reviewed" is not the same answer as "not eligible" and a
-            plain truthiness check would merge them. Eligibility is public --
-            it is derived from last season's usage, and the board already hides
-            ineligible players from every manager.
+            Test None first: a nullable boolean has three states, and a plain
+            truthiness check would lump "not yet reviewed" in with "not
+            eligible". Note {# #} is single-line only -- use this tag when the
+            comment spans lines or contains template syntax.
           {% endcomment %}
-          {% if entry.eligible is None %}
+          {% if row.entry.eligible is None %}
             <span class="pill pill-pending">Pending review</span>
-          {% elif entry.eligible %}
+          {% elif row.entry.eligible %}
             <span class="pill pill-yes">Eligible</span>
           {% else %}
             <span class="pill pill-no">Not eligible</span>
           {% endif %}
-          {% if entry.eligibility_note %}
-            <span class="subtle">{{ entry.eligibility_note }}</span>
+          {% if row.entry.eligibility_note %}
+            <span class="subtle">{{ row.entry.eligibility_note }}</span>
           {% endif %}
         </td>
-        <td class="num"><strong>Round {{ entry.base_keeper_cost }}</strong></td>
+        <td class="num">
+          {% if row.cost.keepable %}
+            <strong>Round {{ row.cost.cost_round }}</strong>
+          {% else %}
+            <span class="subtle">{{ row.cost.reason|default:"&mdash;" }}</span>
+          {% endif %}
+        </td>
       </tr>
     {% empty %}
-      <tr><td colspan="6">No roster entries for this season.</td></tr>
+      <tr><td colspan="7">No roster entries for this season.</td></tr>
     {% endfor %}
   </tbody>
 </table>
 
 <p class="note">
-  Base keeper cost is the draft round for rounds 1&ndash;8; players drafted in
-  round 9 or later, or undrafted, cost a Round 8 pick. Escalation for repeat
-  keeps and pick-forfeiture rules come in the next phase.
+  Cost is this year's cost after escalation &mdash; one round earlier per repeat
+  keep. Which draft slot a keeper actually burns depends on the rest of the set
+  and on the picks that team owns: two keepers at the same cost round burn that
+  round and the one before it, and a traded-away pick pushes the cost to the
+  next-earlier pick. The <a href="{% url 'board' %}">draft board</a> shows those
+  slots. See the <a href="{% url 'rules' %}">rules</a>, sections 2 to 4.
 </p>
-
-<p><a href="{% url 'league_overview' %}">&larr; Back to standings</a></p>
 {% endblock %}

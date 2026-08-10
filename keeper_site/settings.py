@@ -262,5 +262,7 @@ STORAGES = {
 # the eventual swap to Cognito a contained change.
 
 LOGIN_URL = 'login'
-LOGIN_REDIRECT_URL = 'my_team'
+# Straight to the draft board -- it is the point of the site, and it is also
+# the front page, so logging in and typing the bare domain agree.
+LOGIN_REDIRECT_URL = 'board'
 LOGOUT_REDIRECT_URL = 'login'
