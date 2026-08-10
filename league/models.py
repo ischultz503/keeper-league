@@ -68,11 +68,23 @@ class Player(models.Model):
     name = models.CharField(max_length=100)
     position = models.CharField(max_length=3, choices=Position.choices)
 
+    # Filled by the import_adp command. Nullable because a player can exist on a
+    # roster long before any ADP data is loaded (or may have none at all).
+    nfl_team = models.CharField(max_length=4, blank=True, help_text='Short code, e.g. KC.')
+    adp = models.FloatField(
+        null=True, blank=True, help_text='Average draft position, lower is earlier.'
+    )
+    adp_updated = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         ordering = ['name']
 
     def __str__(self):
         return f'{self.name} ({self.position})'
+
+    @property
+    def has_adp(self):
+        return self.adp is not None
 
 
 class RosterEntry(models.Model):

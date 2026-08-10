@@ -10,22 +10,57 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Copy the git-ignored .env into the process environment. Settings then only
+# ever read os.environ, so in Docker/EC2 the same code works with real
+# environment variables and no .env file present.
+load_dotenv(BASE_DIR / '.env')
+
+
+def env_flag(name, default=False):
+    """Read a boolean setting from the environment ("1", "true", "yes")."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+# The FantasyPros key is read here so nothing else has to know where it lives.
+# CLAUDE.md documents the name as FANTASYPROS_API_KEY; the existing .env uses
+# fantasy_pros_api_key, so both are accepted until one is settled on.
+FANTASYPROS_API_KEY = (
+    os.environ.get('FANTASYPROS_API_KEY')
+    or os.environ.get('fantasy_pros_api_key')
+    or ''
+)
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-%0q30mmnz3#%*nd&eg-y3+f&u6ldzsm=w_pgzhjs&3vle3t!-c'
+# The literal below is the development fallback only. Set DJANGO_SECRET_KEY in
+# .env (and in the container environment) before deploying.
+SECRET_KEY = os.environ.get(
+    'DJANGO_SECRET_KEY',
+    'django-insecure-%0q30mmnz3#%*nd&eg-y3+f&u6ldzsm=w_pgzhjs&3vle3t!-c',
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env_flag('DJANGO_DEBUG', default=True)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get('DJANGO_ALLOWED_HOSTS', '').split(',')
+    if host.strip()
+]
 
 
 # Application definition

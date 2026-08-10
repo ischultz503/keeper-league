@@ -5,3 +5,5 @@ ipykernel
 django
 jupyterlab
 markdown
+python-dotenv
+requests

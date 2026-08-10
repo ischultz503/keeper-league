@@ -9,12 +9,18 @@ TestCase.
 """
 
 import json
+import tempfile
+from io import StringIO
+from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
+from . import adp
 from . import keeper_engine as engine
 from .models import (
     DraftPick,
@@ -833,6 +839,138 @@ class AdminKeeperEntryTests(TestCase):
 
 
 # --- Views ------------------------------------------------------------------
+
+
+class NameNormalizationTests(SimpleTestCase):
+    """league/adp.py -- matching FantasyPros spellings to ours."""
+
+    def test_suffixes_are_dropped(self):
+        self.assertEqual(adp.normalize_name('Travis Etienne Jr.'), 'travis etienne')
+        self.assertEqual(adp.normalize_name('Ken Walker III'), 'ken walker')
+
+    def test_punctuation_is_stripped(self):
+        self.assertEqual(adp.normalize_name('Amon-Ra St. Brown'), 'amon ra st brown')
+        self.assertEqual(adp.normalize_name("Ja'Marr Chase"), 'jamarr chase')
+        self.assertEqual(adp.normalize_name('D.K. Metcalf'), 'dk metcalf')
+
+    def test_hyphenated_names_match_either_spelling(self):
+        self.assertEqual(
+            adp.normalize_name('Jaxon Smith-Njigba'),
+            adp.normalize_name('Jaxon Smith Njigba'),
+        )
+
+    def test_accents_are_folded(self):
+        self.assertEqual(adp.normalize_name('Ronnie Bell'), 'ronnie bell')
+        self.assertEqual(adp.normalize_name('Audric Estimé'), 'audric estime')
+
+    def test_defense_matches_on_nickname(self):
+        self.assertEqual(adp.defense_key('Philadelphia Eagles'), 'eagles')
+        self.assertEqual(adp.defense_key('Eagles'), 'eagles')
+
+    def test_position_aliases(self):
+        self.assertEqual(adp.normalize_position('DST'), 'DEF')
+        self.assertEqual(adp.normalize_position('D/ST'), 'DEF')
+        self.assertEqual(adp.normalize_position('PK'), 'K')
+        self.assertEqual(adp.normalize_position('wr'), 'WR')
+
+
+class PlayerMatchingTests(TestCase):
+
+    def setUp(self):
+        self.etienne = Player.objects.create(name='Travis Etienne Jr.', position='RB')
+        self.eagles = Player.objects.create(name='Eagles', position='DEF')
+        self.index = adp.build_index(Player.objects.all())
+
+    def test_matches_across_suffix_differences(self):
+        self.assertEqual(adp.find_player(self.index, 'Travis Etienne', 'RB'), self.etienne)
+
+    def test_matches_a_defense_by_city_and_nickname(self):
+        self.assertEqual(adp.find_player(self.index, 'Philadelphia Eagles', 'DST'), self.eagles)
+
+    def test_position_must_agree(self):
+        self.assertIsNone(adp.find_player(self.index, 'Travis Etienne', 'WR'))
+
+    def test_unknown_players_return_none(self):
+        self.assertIsNone(adp.find_player(self.index, 'Nobody At All', 'RB'))
+
+    def test_ambiguous_names_are_refused_rather_than_guessed(self):
+        """Two real players can share a name and position. Guessing would
+        silently attach one player's ADP to the other."""
+        Player.objects.create(name='Michael Thomas', position='WR')
+        Player.objects.create(name='Michael Thomas', position='WR')
+        index = adp.build_index(Player.objects.all())
+
+        self.assertIsNone(adp.find_player(index, 'Michael Thomas', 'WR'))
+
+
+class ImportAdpCsvTests(TestCase):
+    """The CSV path -- the practical source, since the free API tier caps at 10."""
+
+    def setUp(self):
+        self.jeanty = Player.objects.create(name='Ashton Jeanty', position='RB')
+        self.etienne = Player.objects.create(name='Travis Etienne Jr.', position='RB')
+        self.eagles = Player.objects.create(name='Eagles', position='DEF')
+
+    def write_csv(self, rows, header='Rank,Player,Team,POS,AVG'):
+        path = Path(tempfile.mkdtemp()) / 'adp.csv'
+        path.write_text('\n'.join([header] + rows), encoding='utf-8')
+        return str(path)
+
+    def test_csv_import_sets_adp_and_team(self):
+        path = self.write_csv([
+            '1,Ashton Jeanty,LV,RB1,3.4',
+            '2,Travis Etienne,JAC,RB2,55.1',
+        ])
+        call_command('import_adp', csv=path, stdout=StringIO())
+
+        self.jeanty.refresh_from_db()
+        self.etienne.refresh_from_db()
+        self.assertEqual(self.jeanty.adp, 3.4)
+        self.assertEqual(self.jeanty.nfl_team, 'LV')
+        self.assertEqual(self.etienne.adp, 55.1)      # matched despite the "Jr."
+        self.assertIsNotNone(self.jeanty.adp_updated)
+
+    def test_csv_import_matches_defenses(self):
+        path = self.write_csv(['1,Philadelphia Eagles,PHI,DST,140.2'])
+        call_command('import_adp', csv=path, stdout=StringIO())
+
+        self.eagles.refresh_from_db()
+        self.assertEqual(self.eagles.adp, 140.2)
+
+    def test_unmatched_names_are_reported_not_guessed(self):
+        out = StringIO()
+        path = self.write_csv(['1,Some Rookie,KC,RB1,88.0'])
+        call_command('import_adp', csv=path, stdout=out)
+
+        self.assertIn('Some Rookie', out.getvalue())
+        self.assertIn('could not be matched', out.getvalue())
+
+    def test_import_is_idempotent(self):
+        path = self.write_csv(['1,Ashton Jeanty,LV,RB1,3.4'])
+        call_command('import_adp', csv=path, stdout=StringIO())
+        call_command('import_adp', csv=path, stdout=StringIO())
+
+        self.jeanty.refresh_from_db()
+        self.assertEqual(self.jeanty.adp, 3.4)
+        self.assertEqual(Player.objects.count(), 3)
+
+    def test_a_dry_run_writes_nothing(self):
+        path = self.write_csv(['1,Ashton Jeanty,LV,RB1,3.4'])
+        call_command('import_adp', csv=path, dry_run=True, stdout=StringIO())
+
+        self.jeanty.refresh_from_db()
+        self.assertIsNone(self.jeanty.adp)
+
+    def test_a_missing_csv_is_a_clean_error(self):
+        with self.assertRaises(CommandError):
+            call_command('import_adp', csv='no/such/file.csv', stdout=StringIO())
+
+    def test_rows_without_a_usable_adp_are_skipped(self):
+        path = self.write_csv(['1,Ashton Jeanty,LV,RB1,'])
+        call_command('import_adp', csv=path, stdout=StringIO())
+
+        self.jeanty.refresh_from_db()
+        self.assertIsNone(self.jeanty.adp)
 
 
 class BoardViewTests(TestCase):
