@@ -12,6 +12,7 @@ import json
 import tempfile
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -21,6 +22,7 @@ from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
 
 from . import adp
+from . import draft_sim
 from . import keeper_engine as engine
 from .models import (
     DraftPick,
@@ -55,6 +57,37 @@ def make_draft(season, teams, rounds=ROUNDS):
                 season=season, round=round_number,
                 original_team=team, current_team=team,
             )
+
+
+# --- Fixtures for the pure draft simulator ----------------------------------
+# draft_sim reads nothing but .pk / .round / .position / .adp and the two team
+# ids, so these stand-ins are enough -- and using them keeps its tests off the
+# database entirely.
+
+
+def sim_slots(count=3):
+    """`count` teams, team id n sitting in draft slot n."""
+    return [SimpleNamespace(team_id=n, slot=n) for n in range(1, count + 1)]
+
+
+def sim_picks(slots, rounds):
+    """A full, untraded, unforfeited pick inventory. pk 1..N in round order."""
+    picks = []
+    for round_number in range(1, rounds + 1):
+        for slot in slots:
+            picks.append(SimpleNamespace(
+                pk=len(picks) + 1,
+                round=round_number,
+                original_team_id=slot.team_id,
+                current_team_id=slot.team_id,
+                forfeited=False,
+            ))
+    return picks
+
+
+def sim_players(specs):
+    """specs: (pk, position, adp) triples. adp of None means "unranked"."""
+    return [SimpleNamespace(pk=pk, position=position, adp=adp) for pk, position, adp in specs]
 
 
 def make_entry(season, team, name, draft_round, eligible=True, position='WR'):
@@ -1273,6 +1306,201 @@ class ImportEligibilityTests(TestCase):
     def test_a_missing_csv_is_a_clean_error(self):
         with self.assertRaises(CommandError):
             call_command('import_eligibility', csv='no/such.csv', stdout=StringIO())
+
+
+class DraftSimTests(SimpleTestCase):
+    """The ADP autofill (league/draft_sim.py).
+
+    SimpleTestCase, with hand-built stand-ins for slots, picks and players: the
+    module is meant to be pure, and building fixtures out of SimpleNamespace
+    proves it -- if a Django query ever crept in, these tests would fail.
+    """
+
+    def setUp(self):
+        self.slots = sim_slots(3)
+
+    def rbs(self, count, start=1):
+        """`count` running backs, ADP ascending, so no positional cap applies."""
+        return sim_players([(n, 'RB', float(n)) for n in range(start, start + count)])
+
+    def simulate(self, rounds=3, pool=None, slots=None, **kwargs):
+        slots = slots if slots is not None else self.slots
+        picks = sim_picks(slots, rounds)
+        return picks, draft_sim.simulate_draft(
+            slots=slots,
+            picks=picks,
+            pool=self.rbs(9) if pool is None else pool,
+            rounds=rounds,
+            **kwargs,
+        )
+
+    def test_picks_run_in_snake_order_taking_the_best_adp_available(self):
+        _, result = self.simulate()
+
+        self.assertEqual([p.overall for p in result], list(range(1, 10)))
+        self.assertEqual([p.player_id for p in result], list(range(1, 10)))
+        self.assertTrue(all(p.source == draft_sim.SOURCE_SIM for p in result))
+
+    def test_the_second_round_runs_backwards(self):
+        _, result = self.simulate()
+        picking = {p.overall: p.team_id for p in result}
+
+        self.assertEqual([picking[1], picking[2], picking[3]], [1, 2, 3])
+        self.assertEqual([picking[4], picking[5], picking[6]], [3, 2, 1])
+
+    def test_players_without_adp_are_taken_last(self):
+        pool = sim_players([(1, 'RB', None), (2, 'RB', 5.0), (3, 'RB', 1.0)])
+        _, result = self.simulate(rounds=1, pool=pool)
+
+        self.assertEqual([p.player_id for p in result], [3, 2, 1])
+
+    def test_adp_ties_break_on_id_so_the_board_is_reproducible(self):
+        tied = sim_players([(9, 'RB', 2.0), (3, 'RB', 2.0), (5, 'RB', 2.0)])
+        _, result = self.simulate(rounds=1, pool=tied)
+
+        self.assertEqual([p.player_id for p in result], [3, 5, 9])
+
+    def test_the_same_inputs_always_produce_the_same_board(self):
+        """Scenario comparison is the whole point; a reshuffle would break it."""
+        pool = sim_players([(n, 'RB', 2.0) for n in range(1, 10)])
+        _, first = self.simulate(rounds=3, pool=pool)
+        _, second = self.simulate(rounds=3, pool=list(reversed(pool)))
+
+        self.assertEqual([p.player_id for p in first], [p.player_id for p in second])
+
+    def test_a_burned_pick_is_dead_but_moves_nobody(self):
+        picks, before = self.simulate()
+        burned_pick = next(p for p in picks if p.pk == 2)
+
+        _, after = self.simulate(burned_pick_ids={burned_pick.pk})
+
+        # Same cells, same owners, same pick numbers -- one of them just goes
+        # unused. A forfeited slot is skipped, not removed (rules section 3).
+        self.assertEqual([p.overall for p in before], [p.overall for p in after])
+        self.assertEqual([p.team_id for p in before], [p.team_id for p in after])
+
+        dead = next(p for p in after if p.pick_id == burned_pick.pk)
+        self.assertEqual(dead.source, draft_sim.SOURCE_BURNED)
+        self.assertIsNone(dead.player_id)
+
+        # The player that cell would have taken is still on the board for the
+        # next team, which is exactly what happens in a real draft.
+        self.assertEqual(after[2].player_id, 2)
+
+    def test_a_pick_already_flagged_forfeited_counts_as_burned(self):
+        slots = sim_slots(3)
+        picks = sim_picks(slots, 1)
+        picks[0].forfeited = True
+
+        result = draft_sim.simulate_draft(
+            slots=slots, picks=picks, pool=self.rbs(9), rounds=1
+        )
+        self.assertEqual(result[0].source, draft_sim.SOURCE_BURNED)
+
+    def test_no_second_quarterback_until_round_nine(self):
+        pool = sim_players(
+            [(1, 'QB', 1.0), (2, 'QB', 2.0)] + [(n, 'RB', float(n)) for n in range(3, 12)]
+        )
+        _, result = self.simulate(rounds=10, pool=pool, slots=sim_slots(1))
+        positions = [{p.pk: p.position for p in pool}[cell.player_id] for cell in result]
+
+        self.assertEqual(positions[0], 'QB')
+        self.assertEqual(positions[1:8], ['RB'] * 7)
+        # Round 9 lifts the cap, and the second QB is the best player left.
+        self.assertEqual(positions[8], 'QB')
+
+    def test_no_second_tight_end_until_round_nine(self):
+        pool = sim_players(
+            [(1, 'TE', 1.0), (2, 'TE', 2.0)] + [(n, 'RB', float(n)) for n in range(3, 12)]
+        )
+        _, result = self.simulate(rounds=10, pool=pool, slots=sim_slots(1))
+        positions = [{p.pk: p.position for p in pool}[cell.player_id] for cell in result]
+
+        self.assertEqual(positions[1:8], ['RB'] * 7)
+        self.assertEqual(positions[8], 'TE')
+
+    def test_kickers_and_defenses_wait_for_the_final_two_rounds(self):
+        pool = sim_players([
+            (1, 'K', 1.0), (2, 'DEF', 2.0), (3, 'RB', 3.0), (4, 'RB', 4.0),
+        ])
+        _, result = self.simulate(rounds=4, pool=pool, slots=sim_slots(1))
+
+        # Best ADP in the pool is the kicker, and he still waits until Round 3.
+        self.assertEqual([cell.player_id for cell in result], [3, 4, 1, 2])
+
+    def test_keepers_predictions_and_sandbox_players_are_never_projected(self):
+        _, result = self.simulate(taken_player_ids={1, 2})
+        drafted = [p.player_id for p in result]
+
+        self.assertNotIn(1, drafted)
+        self.assertNotIn(2, drafted)
+        self.assertEqual(drafted[0], 3)
+
+    def test_a_kept_quarterback_counts_against_the_cap(self):
+        pool = sim_players([(1, 'QB', 1.0), (2, 'RB', 2.0)])
+        _, result = self.simulate(
+            rounds=1, pool=pool, slots=sim_slots(1), roster_positions={1: {'QB'}}
+        )
+        self.assertEqual(result[0].player_id, 2)
+
+    def test_an_exhausted_pool_yields_empty_cells_rather_than_an_error(self):
+        _, result = self.simulate(rounds=1, pool=[])
+
+        self.assertTrue(all(p.source == draft_sim.SOURCE_EMPTY for p in result))
+        self.assertTrue(all(p.player_id is None for p in result))
+
+    def test_every_candidate_being_capped_also_yields_empty(self):
+        pool = sim_players([(1, 'K', 1.0)])
+        _, result = self.simulate(rounds=4, pool=pool, slots=sim_slots(1))
+
+        # Rounds 1-2 have nothing takeable (a kicker is not legal yet), Round 3
+        # takes him, Round 4 is out of players. Neither case raises.
+        self.assertEqual(
+            [cell.source for cell in result],
+            [draft_sim.SOURCE_EMPTY, draft_sim.SOURCE_EMPTY,
+             draft_sim.SOURCE_SIM, draft_sim.SOURCE_EMPTY],
+        )
+
+    def test_a_traded_pick_drafts_for_its_new_owner(self):
+        """The cell stays in the original team's column; the player does not."""
+        slots = sim_slots(2)
+        picks = sim_picks(slots, 1)
+        picks[0].current_team_id = 2          # team 1's opener, owned by team 2
+
+        pool = sim_players([(1, 'QB', 1.0), (2, 'RB', 2.0)])
+        result = draft_sim.simulate_draft(
+            slots=slots, picks=picks, pool=pool, rounds=1,
+            roster_positions={2: {'QB'}},
+        )
+
+        self.assertEqual(result[0].team_id, 2)
+        # Team 2 already has a QB, so its cap applies to the pick it acquired.
+        self.assertEqual(result[0].player_id, 2)
+
+
+class DraftSimModelTests(TestCase):
+    """The same module, driven by real rows -- the shape the view will use."""
+
+    def test_it_runs_against_real_slots_picks_and_players(self):
+        season = Season.objects.create(year=2026)
+        teams = make_teams()
+        make_draft(season, teams)
+
+        pool = [
+            Player.objects.create(name=f'Player {n}', position='RB', adp=float(n))
+            for n in range(1, 30)
+        ]
+
+        result = draft_sim.simulate_draft(
+            slots=list(DraftSlot.objects.filter(season=season)),
+            picks=list(DraftPick.objects.filter(season=season)),
+            pool=pool,
+        )
+
+        self.assertEqual(len(result), 10 * ROUNDS)
+        self.assertEqual(result[0].player_id, pool[0].pk)
+        self.assertEqual(result[0].round, 1)
+        self.assertEqual(result[-1].overall, 10 * ROUNDS)
 
 
 class BoardViewTests(TestCase):
