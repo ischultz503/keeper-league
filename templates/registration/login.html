@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 
-{# django.contrib.auth.views.LoginView looks for this exact path by default:
-   registration/login.html. It puts an AuthenticationForm in the context as
-   `form` and handles POST, validation and the session for us. #}
+{% comment %}
+  django.contrib.auth.views.LoginView looks for this exact path by default:
+  registration/login.html. It puts an AuthenticationForm in the context as
+  `form` and handles POST, validation and the session for us.
+{% endcomment %}
 
 {% block title %}Log in - Keeper League{% endblock %}
 

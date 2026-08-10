@@ -4,8 +4,10 @@
 
 {% block content %}
 {% if rules_html %}
-  {# Already converted to HTML and marked safe in the view. The source file is
-     repo-controlled, so this is not user input being trusted. #}
+  {% comment %}
+    Already converted to HTML and marked safe in the view. The source file is
+    repo-controlled, so this is not user input being trusted.
+  {% endcomment %}
   <article class="prose">{{ rules_html }}</article>
 {% else %}
   <h1>League Rules</h1>

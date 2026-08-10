@@ -14,6 +14,7 @@ from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
@@ -3052,6 +3053,48 @@ class ResetBoardTests(TestCase):
 
         html = self.client.get(reverse('board')).content.decode()
         self.assertNotIn('id="reset-board-form"', html)
+
+
+class TemplateCommentTests(SimpleTestCase):
+    """`{# #}` is single-line only, and failing at it is silent.
+
+    Django's short comment tag must open and close on ONE line. Spread it over
+    two and the tag is never recognised, so the "comment" is just text -- it
+    renders on the page, in brackets, looking like a bug in the content. It
+    happened on the rules page and nothing caught it: no error, no warning, and
+    every test still passed, because a template that prints extra text is a
+    perfectly valid template.
+
+    A comment that spans lines needs {% comment %} ... {% endcomment %}.
+    """
+
+    # Ours only. The glob would otherwise descend into the virtualenv and grade
+    # Django's own bundled templates, which are not ours to fix.
+    VENDOR = ('site-packages', 'node_modules')
+
+    def template_files(self):
+        root = Path(settings.BASE_DIR)
+        return sorted(
+            path for path in root.glob('**/templates/**/*.html')
+            if not any(part in self.VENDOR or part.startswith('.') for part in path.parts)
+        )
+
+    def test_there_are_templates_to_check(self):
+        """Guard the guard: a broken glob would make this suite pass emptily."""
+        self.assertGreater(len(self.template_files()), 5)
+
+    def test_no_short_comment_tag_is_left_open(self):
+        offenders = []
+        for path in self.template_files():
+            for number, line in enumerate(path.read_text(encoding='utf-8').split('\n'), 1):
+                if '{#' in line and '#}' not in line.split('{#', 1)[1]:
+                    offenders.append(f'{path.name}:{number}')
+
+        self.assertEqual(
+            offenders, [],
+            'Multi-line {# #} renders as literal text. Use {% comment %} instead: '
+            + ', '.join(offenders),
+        )
 
 
 class RosterOrderingTests(TestCase):
