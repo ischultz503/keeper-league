@@ -1156,6 +1156,125 @@ class ImportAdpCsvTests(TestCase):
         self.assertIsNone(self.jeanty.adp)
 
 
+class ImportEligibilityTests(TestCase):
+    """Rules section 5, imported from a reviewed CSV."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2025)
+        self.team = Team.objects.create(name='Zimbo Baggins', owner_name='Isaac')
+        self.jeanty = self.entry('Ashton Jeanty', 'RB')
+        self.etienne = self.entry('Travis Etienne Jr.', 'RB')
+        self.eagles = self.entry('Eagles', 'DEF')
+
+    def entry(self, name, position):
+        player = Player.objects.create(name=name, position=position)
+        return RosterEntry.objects.create(
+            season=self.season, team=self.team, player=player, draft_round=5
+        )
+
+    def write_csv(self, rows):
+        header = ('Owner,Team,Player_Name,Player_Position,weeks_started,'
+                  'weeks_rostered,eligible,reason,source')
+        path = Path(tempfile.mkdtemp()) / 'eligibility.csv'
+        path.write_text('\n'.join([header] + rows), encoding='utf-8')
+        return str(path)
+
+    def run_import(self, rows, apply=False):
+        out = StringIO()
+        call_command(
+            'import_eligibility', csv=self.write_csv(rows), apply=apply, stdout=out
+        )
+        return out.getvalue()
+
+    def test_yes_and_no_become_true_and_false(self):
+        self.run_import([
+            'Isaac,Zimbo Baggins,Ashton Jeanty,RB,16,17,yes,"started 16 wks",yahoo',
+            'Isaac,Zimbo Baggins,Eagles,DEF,0,7,NO,"failed both: started 0, rostered 7",yahoo',
+        ], apply=True)
+
+        self.jeanty.refresh_from_db()
+        self.eagles.refresh_from_db()
+        self.assertIs(self.jeanty.eligible, True)
+        self.assertIs(self.eagles.eligible, False)
+
+    def test_the_reason_becomes_the_note(self):
+        self.run_import(
+            ['Isaac,Zimbo Baggins,Ashton Jeanty,RB,16,17,yes,"started 16 wks",yahoo'],
+            apply=True,
+        )
+        self.jeanty.refresh_from_db()
+        self.assertEqual(self.jeanty.eligibility_note, 'started 16 wks')
+
+    def test_dry_run_is_the_default_and_writes_nothing(self):
+        """This rewrites the flag that gates every keeper declaration, so
+        seeing the diff first is worth a flag."""
+        output = self.run_import(
+            ['Isaac,Zimbo Baggins,Ashton Jeanty,RB,16,17,NO,"nope",yahoo']
+        )
+
+        self.jeanty.refresh_from_db()
+        self.assertIs(self.jeanty.eligible, True)          # model default, untouched
+        self.assertIn('Dry run', output)
+
+    def test_matching_survives_a_suffix_difference(self):
+        self.run_import(
+            ['Isaac,Zimbo Baggins,Travis Etienne,RB,13,17,yes,"started 13 wks",yahoo'],
+            apply=True,
+        )
+        self.etienne.refresh_from_db()
+        self.assertEqual(self.etienne.eligibility_note, 'started 13 wks')
+
+    def test_a_defense_matches_on_its_nickname(self):
+        self.run_import(
+            ['Isaac,Zimbo Baggins,Philadelphia Eagles,DEF,0,7,NO,"failed both",yahoo'],
+            apply=True,
+        )
+        self.eagles.refresh_from_db()
+        self.assertIs(self.eagles.eligible, False)
+
+    def test_unmatched_rows_are_reported_not_guessed(self):
+        output = self.run_import(
+            ['Isaac,Zimbo Baggins,Nobody At All,RB,1,1,NO,"failed both",yahoo']
+        )
+        self.assertIn('Nobody At All', output)
+        self.assertIn('matching no roster entry', output)
+
+    def test_an_unreadable_eligible_value_is_reported(self):
+        output = self.run_import(
+            ['Isaac,Zimbo Baggins,Ashton Jeanty,RB,16,17,maybe,"unsure",yahoo']
+        )
+        self.assertIn('unreadable', output)
+        self.assertIn('Ashton Jeanty', output)
+
+    def test_roster_entries_absent_from_the_csv_are_left_alone(self):
+        output = self.run_import(
+            ['Isaac,Zimbo Baggins,Ashton Jeanty,RB,16,17,yes,"started 16 wks",yahoo'],
+            apply=True,
+        )
+        self.etienne.refresh_from_db()
+        self.assertEqual(self.etienne.eligibility_note, '')
+        self.assertIn('absent from the CSV', output)
+
+    def test_an_owner_disagreeing_with_the_database_is_flagged(self):
+        """One of the two is stale, which is worth knowing before trusting either."""
+        output = self.run_import(
+            ['Marcus,Shedeur for ROTY,Ashton Jeanty,RB,16,17,yes,"started 16 wks",yahoo']
+        )
+        self.assertIn('owner disagrees', output)
+
+    def test_reimporting_reports_nothing_left_to_change(self):
+        rows = ['Isaac,Zimbo Baggins,Ashton Jeanty,RB,16,17,yes,"started 16 wks",yahoo']
+        self.run_import(rows, apply=True)
+        output = self.run_import(rows, apply=True)
+
+        self.assertIn('to change: 0', output)
+        self.assertIn('already correct: 1', output)
+
+    def test_a_missing_csv_is_a_clean_error(self):
+        with self.assertRaises(CommandError):
+            call_command('import_eligibility', csv='no/such.csv', stdout=StringIO())
+
+
 class BoardViewTests(TestCase):
     """The draft board grid."""
 
