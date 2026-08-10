@@ -2119,6 +2119,112 @@ class KeeperPreviewApiTests(TestCase):
         )
 
 
+class RevealInterplayTests(TestCase):
+    """Part E: what predictions become once the real declarations land."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.roster_season = Season.objects.create(year=2025)
+        cls.season = Season.objects.create(year=2026)
+        cls.teams = make_teams()
+        make_draft(cls.season, cls.teams)
+        cls.isaac = cls.teams['Isaac']
+        cls.marcus = cls.teams['Marcus']
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+        self.client.force_login(self.user)
+
+    def reveal(self):
+        self.season.keepers_revealed = True
+        self.season.save(update_fields=['keepers_revealed'])
+
+    def declare(self, team, entry):
+        KeeperSelection.objects.create(season=self.season, team=team, roster_entry=entry)
+        engine.recompute_team_selections(team, self.season)
+
+    def predict(self, entry):
+        return KeeperPrediction.objects.create(
+            user=self.user, season=self.season, roster_entry=entry
+        )
+
+    def cell_for(self, response, round_number, team):
+        column = [s.team_id for s in response.context['slots']].index(team.pk)
+        row = next(r for r in response.context['rows'] if r['round'] == round_number)
+        return row['cells'][column]
+
+    def test_a_correct_call_is_ticked(self):
+        entry = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.predict(entry)
+        self.declare(self.marcus, entry)
+        self.reveal()
+
+        response = self.client.get(reverse('board'))
+        cell = self.cell_for(response, 4, self.marcus)
+
+        self.assertIsNotNone(cell['keeper'])
+        self.assertTrue(cell['called'])
+        self.assertEqual(response.context['called_count'], 1)
+        self.assertEqual(response.context['keeper_count'], 1)
+
+    def test_a_keeper_nobody_predicted_is_not_ticked(self):
+        entry = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.declare(self.marcus, entry)
+        self.reveal()
+
+        cell = self.cell_for(self.client.get(reverse('board')), 4, self.marcus)
+        self.assertFalse(cell['called'])
+
+    def test_a_wrong_call_no_longer_occupies_a_cell(self):
+        """The real declarations own the revealed board; guesses step aside."""
+        wrong = make_entry(self.roster_season, self.marcus, 'Wrong Guess', 6)
+        actual = make_entry(self.roster_season, self.marcus, 'Actually Kept', 4)
+        self.predict(wrong)
+        self.declare(self.marcus, actual)
+        self.reveal()
+
+        response = self.client.get(reverse('board'))
+        self.assertIsNone(self.cell_for(response, 6, self.marcus)['prediction'])
+        self.assertEqual(response.context['called_count'], 0)
+        self.assertEqual(response.context['prediction_count'], 1)
+
+    def test_predictions_are_read_only_after_the_reveal(self):
+        entry = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.predict(entry)
+        self.declare(self.marcus, entry)
+        self.reveal()
+
+        html = self.client.get(reverse('board')).content.decode()
+        self.assertNotIn('Unlock this pick', html)
+        self.assertNotIn('name="lock"', html)
+
+    def test_no_cell_is_predictable_after_the_reveal(self):
+        entry = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.declare(self.marcus, entry)
+        self.reveal()
+
+        response = self.client.get(reverse('board'))
+        every_cell = [c for row in response.context['rows'] for c in row['cells'] if c]
+        self.assertFalse(any(cell['predictable'] for cell in every_cell))
+
+    def test_the_scorecard_stays_private(self):
+        """It counts only this user's calls -- another manager's are invisible."""
+        entry = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        rival = get_user_model().objects.create_user('rival', password='test-pass-1234')
+        self.teams['Chris'].user = rival
+        self.teams['Chris'].save(update_fields=['user'])
+        KeeperPrediction.objects.create(user=rival, season=self.season, roster_entry=entry)
+
+        self.declare(self.marcus, entry)
+        self.reveal()
+
+        response = self.client.get(reverse('board'))
+        self.assertEqual(response.context['called_count'], 0)
+        self.assertFalse(self.cell_for(response, 4, self.marcus)['called'])
+
+
 class SimulateApiTests(TestCase):
     """POST /board/simulate/ -- the ADP autofill endpoint."""
 

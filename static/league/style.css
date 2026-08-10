@@ -422,6 +422,16 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 
 .cell.own-col.locked { box-shadow: inset 0 0 0 2px #fff; }
 
+/* "You called it" -- a small tick on a revealed keeper this user predicted.
+   Deliberately quiet: it is a private footnote on a public board, not a score. */
+.called-tick {
+  position: absolute;
+  bottom: 0.15rem;
+  right: 0.3rem;         /* bottom corner: the top-right one is the trade badge */
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.85);
+}
+
 /* Candidate names --------------------------------------------------------- */
 
 .cell .cands { margin: 0; padding: 0; list-style: none; }

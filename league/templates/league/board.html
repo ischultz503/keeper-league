@@ -21,6 +21,9 @@
       Snake draft, {{ slots|length }} teams
       {% if revealed %}
         &middot; <strong>keepers revealed</strong>
+        {% if prediction_count %}
+          &middot; you called {{ called_count }} of {{ keeper_count }}
+        {% endif %}
       {% else %}
         &middot; cells show who each team <em>could</em> keep at that round's cost
       {% endif %}
@@ -146,10 +149,11 @@
               {% else %}
                 {% if cell.keeper %}
                   {% with player=cell.keeper.roster_entry.player %}
-                    <td class="cell filled locked pos-bg-{{ player.position }}{% if cell.is_own %} own-col{% endif %}"
+                    <td class="cell filled locked pos-bg-{{ player.position }}{% if cell.is_own %} own-col{% endif %}{% if cell.called %} called{% endif %}"
                         data-pick-id="{{ cell.pick.pk }}" data-round="{{ cell.pick.round }}">
                       <span class="pick-label">{{ cell.label }}</span>
                       {% if cell.traded_to %}<span class="badge" title="Traded to {{ cell.traded_to.name }}">&rarr; {{ cell.traded_to.owner_name }}</span>{% endif %}
+                      {% if cell.called %}<span class="called-tick" title="You predicted this one">&#10003;</span>{% endif %}
                       <span class="filled-name">{{ player.name }}</span>
                       <span class="filled-sub">{{ player.position }}{% if player.nfl_team %} &ndash; {{ player.nfl_team }}{% endif %}</span>
                     </td>
@@ -248,6 +252,10 @@
 <p class="note">
   {% if revealed %}
     Filled cells are declared keepers; those slots are skipped in the draft.
+    {% if prediction_count %}
+      A &#10003; marks one you predicted. Your calls are history now &mdash;
+      read-only, and still nobody else's business.
+    {% endif %}
   {% else %}
     Names show players whose keeper cost lands in that round, based on last
     season's draft. They are possibilities, not declarations &mdash; and they

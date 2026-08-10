@@ -183,10 +183,12 @@ def board(request):
 
     # Post-reveal: what each burned cell actually paid for.
     kept_by_pick = {}
+    kept_entry_ids = set()
     if revealed:
         for selection in KeeperSelection.objects.filter(season=season).select_related(
             'roster_entry__player', 'team', 'burned_pick'
         ):
+            kept_entry_ids.add(selection.roster_entry_id)
             if selection.burned_pick_id:
                 kept_by_pick[selection.burned_pick_id] = selection
 
@@ -201,9 +203,21 @@ def board(request):
     # Private predictions about other teams, run through the engine per team so
     # a rival's predicted SET resolves properly -- two guesses at the same cost
     # round collide and the second walks earlier, exactly as a real set would.
-    predicted_by_pick, predicted_entry_ids, team_warnings = _place_predictions(
-        request.user, season, revealed
-    )
+    #
+    # Once keepers are revealed the real declarations own the board and guesses
+    # stop being placed on it -- two competing truths in one grid would be
+    # unreadable. What survives is the scorecard: which calls came off.
+    if revealed:
+        predicted_by_pick, team_warnings = {}, {}
+        predicted_entry_ids = set(
+            KeeperPrediction.objects
+            .filter(user=request.user, season=season)
+            .values_list('roster_entry_id', flat=True)
+        )
+    else:
+        predicted_by_pick, predicted_entry_ids, team_warnings = _place_predictions(
+            request.user, season
+        )
 
     candidates = {}
     if not revealed and roster_season is not None:
@@ -270,12 +284,16 @@ def board(request):
                 slot.slot, round_number, team_count
             )
             is_own = own_team is not None and slot.team_id == own_team.pk
+            keeper = kept_by_pick.get(pick.pk)
             cells.append({
                 'pick': pick,
                 'team': slot.team,
                 'is_own': is_own,
                 'traded_to': pick.current_team if pick.is_traded else None,
-                'keeper': kept_by_pick.get(pick.pk),
+                'keeper': keeper,
+                # "You called it": this user predicted the player who really
+                # was kept here. Costs nothing -- both sets are already loaded.
+                'called': keeper is not None and keeper.roster_entry_id in predicted_entry_ids,
                 'prediction': predicted_by_pick.get(pick.pk),
                 # Own-team cells are never clickable: that plan stays in page
                 # state, never in the database.
@@ -306,10 +324,13 @@ def board(request):
         'visible_round_count': len(visible_rounds),
         'team_warnings': team_warnings,
         'prediction_count': len(predicted_entry_ids),
+        # Post-reveal scorecard: how many of this user's calls were right.
+        'called_count': len(predicted_entry_ids & kept_entry_ids),
+        'keeper_count': len(kept_entry_ids),
     })
 
 
-def _place_predictions(user, season, revealed):
+def _place_predictions(user, season):
     """Where this user's locked predictions land, and which sets are illegal.
 
     Returns (by_pick_id, entry_ids, warnings_by_team). Every query is filtered
@@ -591,7 +612,7 @@ def _keeper_state(user, team, season, sandbox_entries):
     else:
         # Burns come from the same engine pass the board uses, so a cell the
         # board shows as locked is a cell the simulator treats as gone.
-        predicted_by_pick, _, _ = _place_predictions(user, season, False)
+        predicted_by_pick, _, _ = _place_predictions(user, season)
         burned.update(predicted_by_pick)
 
         # The players are read separately rather than off those assignments: a
