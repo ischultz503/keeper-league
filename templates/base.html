@@ -11,7 +11,8 @@
     <a class="brand" href="{% url 'league_overview' %}">Keeper League</a>
     <nav>
       {% if user.is_authenticated %}
-        <a href="{% url 'league_overview' %}">League</a>
+        {# The year comes from league.context_processors.nav, not a literal. #}
+        <a href="{% url 'league_overview' %}">{% if nav_roster_season %}{{ nav_roster_season.year }} {% endif %}Standings</a>
         <a href="{% url 'board' %}">Draft Board</a>
         <a href="{% url 'my_team' %}">My Team</a>
         <a href="{% url 'my_keepers' %}">My Keepers</a>

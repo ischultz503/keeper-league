@@ -13,6 +13,7 @@
       <th>Pos</th>
       <th class="num">Draft round</th>
       <th class="num">Overall pick</th>
+      <th>Eligibility</th>
       <th class="num">Base keeper cost</th>
     </tr>
   </thead>
@@ -23,10 +24,29 @@
         <td><span class="pos pos-{{ entry.player.position }}">{{ entry.player.position }}</span></td>
         <td class="num">{% if entry.is_undrafted %}<span class="subtle">Undrafted</span>{% else %}{{ entry.draft_round }}{% endif %}</td>
         <td class="num">{% if entry.overall_pick %}{{ entry.overall_pick }}{% else %}<span class="subtle">&mdash;</span>{% endif %}</td>
+        <td>
+          {% comment %}
+            Same three-state treatment as My Keepers: test None first, because
+            "not yet reviewed" is not the same answer as "not eligible" and a
+            plain truthiness check would merge them. Eligibility is public --
+            it is derived from last season's usage, and the board already hides
+            ineligible players from every manager.
+          {% endcomment %}
+          {% if entry.eligible is None %}
+            <span class="pill pill-pending">Pending review</span>
+          {% elif entry.eligible %}
+            <span class="pill pill-yes">Eligible</span>
+          {% else %}
+            <span class="pill pill-no">Not eligible</span>
+          {% endif %}
+          {% if entry.eligibility_note %}
+            <span class="subtle">{{ entry.eligibility_note }}</span>
+          {% endif %}
+        </td>
         <td class="num"><strong>Round {{ entry.base_keeper_cost }}</strong></td>
       </tr>
     {% empty %}
-      <tr><td colspan="5">No roster entries for this season.</td></tr>
+      <tr><td colspan="6">No roster entries for this season.</td></tr>
     {% endfor %}
   </tbody>
 </table>
@@ -37,5 +57,5 @@
   keeps and pick-forfeiture rules come in the next phase.
 </p>
 
-<p><a href="{% url 'league_overview' %}">&larr; Back to league</a></p>
+<p><a href="{% url 'league_overview' %}">&larr; Back to standings</a></p>
 {% endblock %}

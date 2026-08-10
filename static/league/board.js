@@ -338,4 +338,31 @@
 
   simulateBtn.addEventListener('click', simulate);
   clearBtn.addEventListener('click', clearSimulation);
+
+  /* --- Reset ------------------------------------------------------------- */
+
+  /* The locks are rows in the database and the server deletes them; the sandbox
+   * ticks only ever existed in this tab, so nothing on the server can clear
+   * them. Both halves have to happen for "reset" to mean what it says. */
+  var resetForm = document.getElementById('reset-board-form');
+
+  if (resetForm) {
+    resetForm.addEventListener('submit', function (event) {
+      var lockCount = document.querySelectorAll('.cell.predicted').length;
+      var message = lockCount
+        ? 'Clear all ' + lockCount + ' locked prediction(s) and your keeper ticks?'
+        : 'Clear your keeper ticks?';
+
+      if (!window.confirm(message)) {
+        event.preventDefault();
+        return;
+      }
+
+      // Wipe the stash BEFORE the POST: the response is a redirect back here,
+      // and the restore on the next load would otherwise tick everything
+      // straight back on.
+      boxes.forEach(function (box) { box.checked = false; });
+      saveSelection();
+    });
+  }
 })();

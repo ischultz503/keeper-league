@@ -1,24 +1,45 @@
 {% extends "base.html" %}
 
-{% block title %}League Overview{% endblock %}
+{% block title %}{% if season %}{{ season.year }} {% endif %}Standings{% endblock %}
 
 {% block content %}
-<h1>League Overview</h1>
-<p class="subtle">{% if season %}{{ season.year }} season{% else %}No season data imported yet.{% endif %}</p>
+<h1>{% if season %}{{ season.year }} {% endif %}Final Standings</h1>
+<p class="subtle">
+  {% if not season %}
+    No season data imported yet.
+  {% elif ranked %}
+    Final finish, ten teams &middot; the 2026 draft order is this list reversed
+    (<a href="{% url 'rules' %}">rules</a>, section 6)
+  {% else %}
+    {{ season.year }} season &middot; no finishing order on record
+  {% endif %}
+</p>
 
 <table class="data">
   <thead>
-    <tr><th>Team</th><th>Manager</th><th></th></tr>
+    <tr>
+      {% if ranked %}<th class="num">Finish</th>{% endif %}
+      <th>Team</th>
+      <th>Manager</th>
+      <th></th>
+    </tr>
   </thead>
   <tbody>
     {% for team in teams %}
       <tr{% if team.user_id == user.id %} class="mine"{% endif %}>
+        {% if ranked %}
+          <td class="num rank">
+            {% if team.rank %}{{ team.rank }}{% else %}<span class="subtle">&mdash;</span>{% endif %}
+          </td>
+        {% endif %}
         <td><a href="{% url 'team_detail' team.pk %}">{{ team.name }}</a></td>
         <td>{{ team.owner_name }}</td>
-        <td class="subtle">{% if team.user_id == user.id %}your team{% endif %}</td>
+        <td class="subtle">
+          {% if team.rank == 1 %}champion{% elif team.user_id == user.id %}your team{% endif %}
+        </td>
       </tr>
     {% empty %}
-      <tr><td colspan="3">No teams yet. Run <code>python manage.py import_rosters</code>.</td></tr>
+      <tr><td colspan="4">No teams yet. Run <code>python manage.py import_rosters</code>.</td></tr>
     {% endfor %}
   </tbody>
 </table>

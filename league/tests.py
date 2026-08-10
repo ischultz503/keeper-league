@@ -24,6 +24,7 @@ from django.urls import reverse
 from . import adp
 from . import draft_sim
 from . import keeper_engine as engine
+from . import views
 from .models import (
     DraftPick,
     DraftSlot,
@@ -2433,6 +2434,167 @@ class SimulateApiTests(TestCase):
             set(data['fills'][0]),
             {'pick_id', 'player', 'position', 'nfl_team', 'source'},
         )
+
+
+class StandingsTests(TestCase):
+    """The league page is the previous season's final standings.
+
+    Rules section 6: the 2026 draft order is the final 2025 standings reversed,
+    which is the only reason this app can show standings it does not store.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.roster_season = Season.objects.create(year=2025)
+        cls.season = Season.objects.create(year=2026)
+        cls.teams = make_teams()
+        make_draft(cls.season, cls.teams)
+        # The standings hang off the *roster* season, so one real roster row is
+        # what makes 2025 the season the page is about.
+        make_entry(cls.roster_season, cls.teams['Isaac'], 'Rostered Guy', 5)
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.teams['Isaac'].user = self.user
+        self.teams['Isaac'].save(update_fields=['user'])
+        self.client.force_login(self.user)
+
+    def test_the_last_draft_slot_is_the_champion(self):
+        standings = views.final_standings(self.roster_season)
+
+        # OWNERS is the locked slot order: Ricky picks first, Marcus tenth.
+        self.assertEqual(standings[self.teams['Marcus'].pk], 1)
+        self.assertEqual(standings[self.teams['Ricky'].pk], 10)
+
+    def test_teams_are_listed_in_finishing_order(self):
+        response = self.client.get(reverse('league_overview'))
+        owners = [team.owner_name for team in response.context['teams']]
+
+        self.assertEqual(owners, list(reversed(OWNERS)))
+        self.assertEqual(response.context['teams'][0].rank, 1)
+
+    def test_the_page_and_nav_name_the_season(self):
+        html = self.client.get(reverse('league_overview')).content.decode()
+
+        self.assertIn('2025 Final Standings', html)
+        self.assertIn('2025 Standings', html)          # the nav tab
+        self.assertNotIn('>League<', html)
+
+    def test_a_season_with_no_derivable_order_is_not_invented(self):
+        """From 2027 the consolation bracket picks its own slots.
+
+        The order stops being a reversal of anything then, so the derivation
+        must return nothing rather than a plausible-looking lie.
+        """
+        later = Season.objects.create(year=2027)
+        self.assertEqual(views.final_standings(later), {})
+
+    def test_an_unranked_league_still_renders(self):
+        DraftSlot.objects.all().delete()
+        response = self.client.get(reverse('league_overview'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['ranked'])
+        self.assertEqual(len(response.context['teams']), 10)
+
+
+class TeamDetailEligibilityTests(TestCase):
+    """Another manager's roster shows eligibility, same as your own pages."""
+
+    def setUp(self):
+        self.roster_season = Season.objects.create(year=2025)
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = Team.objects.create(name='Zimbo Baggins', owner_name='Isaac', user=self.user)
+        self.marcus = Team.objects.create(name='Shedeur for ROTY', owner_name='Marcus')
+        self.client.force_login(self.user)
+
+    def test_a_rivals_roster_shows_the_three_eligibility_states(self):
+        make_entry(self.roster_season, self.marcus, 'Fine Player', 3)
+        blocked = make_entry(self.roster_season, self.marcus, 'Hurt Player', 4, eligible=False)
+        blocked.eligibility_note = 'added wk 14'
+        blocked.save(update_fields=['eligibility_note'])
+        pending = make_entry(self.roster_season, self.marcus, 'Unknown Player', 5)
+        pending.eligible = None
+        pending.save(update_fields=['eligible'])
+
+        html = self.client.get(
+            reverse('team_detail', args=[self.marcus.pk])
+        ).content.decode()
+
+        self.assertIn('pill-yes', html)
+        self.assertIn('pill-no', html)
+        self.assertIn('pill-pending', html)
+        self.assertIn('added wk 14', html)
+
+
+class ResetBoardTests(TestCase):
+    """The reset button clears this user's locks and nobody else's."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.roster_season = Season.objects.create(year=2025)
+        cls.season = Season.objects.create(year=2026)
+        cls.teams = make_teams()
+        make_draft(cls.season, cls.teams)
+        cls.isaac = cls.teams['Isaac']
+        cls.marcus = cls.teams['Marcus']
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+        self.client.force_login(self.user)
+        self.entry = make_entry(self.roster_season, self.marcus, 'Locked Guy', 3)
+
+    def lock_for(self, user):
+        return KeeperPrediction.objects.create(
+            user=user, season=self.season, roster_entry=self.entry
+        )
+
+    def test_reset_clears_my_locks(self):
+        self.lock_for(self.user)
+        self.client.post(reverse('reset_board'), {'next': reverse('board')})
+
+        self.assertEqual(KeeperPrediction.objects.filter(user=self.user).count(), 0)
+
+    def test_reset_leaves_another_users_locks_alone(self):
+        rival = get_user_model().objects.create_user('rival', password='test-pass-1234')
+        self.lock_for(rival)
+        self.lock_for(self.user)
+
+        self.client.post(reverse('reset_board'), {'next': reverse('board')})
+
+        self.assertEqual(KeeperPrediction.objects.filter(user=rival).count(), 1)
+        self.assertEqual(KeeperPrediction.objects.filter(user=self.user).count(), 0)
+
+    def test_get_is_not_allowed(self):
+        """A link would let any page wipe the board with an <img> tag."""
+        self.assertEqual(self.client.get(reverse('reset_board')).status_code, 405)
+
+    def test_anonymous_users_cannot_reset(self):
+        self.client.logout()
+        response = self.client.post(reverse('reset_board'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_an_off_site_next_is_ignored(self):
+        response = self.client.post(
+            reverse('reset_board'), {'next': 'https://evil.example.com/'}
+        )
+        self.assertRedirects(response, reverse('board'))
+
+    def test_the_board_offers_the_reset_control(self):
+        html = self.client.get(reverse('board')).content.decode()
+        self.assertIn('id="reset-board-form"', html)
+        self.assertIn(reverse('reset_board'), html)
+
+    def test_the_reset_control_is_gone_once_keepers_are_revealed(self):
+        """Post-reveal the locks are history; there is nothing to edit."""
+        self.season.keepers_revealed = True
+        self.season.save(update_fields=['keepers_revealed'])
+
+        html = self.client.get(reverse('board')).content.decode()
+        self.assertNotIn('id="reset-board-form"', html)
 
 
 class RosterOrderingTests(TestCase):

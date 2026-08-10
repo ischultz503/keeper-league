@@ -127,6 +127,17 @@ table.data tr.undrafted td { color: var(--muted); }
 table.data tr.undrafted td strong { color: var(--ink); }
 table.data a { color: var(--accent); font-weight: 600; }
 
+/* Finishing position: narrow, bold, and quiet enough not to shout over the
+   team names, which are what people actually scan for. */
+table.data td.rank {
+  width: 3.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+table.data tr:first-child td.rank { color: var(--accent); }
+
 /* Position chips ---------------------------------------------------------- */
 
 .pos {
@@ -254,6 +265,15 @@ main.wide { max-width: 1500px; }
 }
 
 .board-btn.ghost:hover { border-color: var(--accent); }
+
+/* Destructive, so it reads warm rather than green -- but still an outline, not
+   a filled button. It clears your own private notes, not the league's data. */
+.board-btn.ghost.danger { color: #a8442c; }
+.board-btn.ghost.danger:hover { border-color: #a8442c; }
+
+/* The reset form is a flex item alongside the buttons; without this it would
+   introduce its own block box and break the row. */
+.board-controls form { display: inline-flex; margin: 0; }
 
 .sim-error {
   margin: 0.6rem 0 0;

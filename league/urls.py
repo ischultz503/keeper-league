@@ -27,4 +27,8 @@ urlpatterns = [
     # Predictions are a plain form POST + redirect, not JSON: the engine has to
     # re-place the whole team after every change.
     path('predictions/toggle/', views.toggle_prediction, name='toggle_prediction'),
+    # Clears every lock this user has placed. POST for the same reason as any
+    # other state change -- a link would let a page elsewhere wipe the board by
+    # embedding an image.
+    path('predictions/reset/', views.reset_board, name='reset_board'),
 ]

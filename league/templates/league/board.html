@@ -41,6 +41,20 @@
     <button type="button" class="board-btn" id="simulate-btn">Simulate draft</button>
     <button type="button" class="board-btn ghost" id="clear-sim-btn" hidden>Clear simulation</button>
 
+    {% if not revealed %}
+      {% comment %}
+        A real form, not a fetch: this one writes (it deletes your locks), and
+        as a form it still works if the JavaScript never loads. board.js hangs
+        a confirm() and the sessionStorage wipe off its submit event, since the
+        sandbox ticks live in the browser and the server cannot clear them.
+      {% endcomment %}
+      <form method="post" action="{% url 'reset_board' %}" id="reset-board-form">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <button type="submit" class="board-btn ghost danger">Reset board</button>
+      </form>
+    {% endif %}
+
     {% if total_rounds > visible_round_count or show_all_rounds %}
       {% comment %}
         A plain link with a query parameter rather than JS: the server already

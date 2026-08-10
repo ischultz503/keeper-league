@@ -61,14 +61,56 @@ def keeper_season():
     return Season.objects.filter(year=roster_season.year + 1).first()
 
 
+# Rules section 6, "Transition rule -- 2026 draft only": the 2026 order is
+# Yahoo's final 2025 standings reversed. That equivalence is what lets this app
+# show 2025 standings without storing them -- and it holds for this one draft
+# only. From 2027 the consolation bracket picks its own slots, so the order
+# stops being a reversal of anything and the derivation below must not be
+# trusted. It returns nothing for other years rather than a plausible lie.
+TRANSITION_DRAFT_YEAR = 2026
+
+
+def final_standings(roster_season):
+    """{team_id: finishing position} for a completed season, or {} if unknown.
+
+    Derived from the following season's draft slots: slot 1 belongs to the team
+    that finished last, so a ten-team league maps slot 1 to 10th and slot 10 to
+    the champion. See TRANSITION_DRAFT_YEAR for why this is sound for 2025 and
+    must not be extended past it.
+    """
+    if roster_season is None or roster_season.year + 1 != TRANSITION_DRAFT_YEAR:
+        return {}
+
+    slots = list(
+        DraftSlot.objects.filter(season__year=TRANSITION_DRAFT_YEAR).values_list('team_id', 'slot')
+    )
+    if not slots:
+        return {}
+
+    team_count = len(slots)
+    return {team_id: team_count - slot + 1 for team_id, slot in slots}
+
+
 @login_required
 def league_overview(request):
-    """Landing page: every team in the league, linking to its roster."""
-    teams = Team.objects.all()
+    """Final standings for the last completed season, linking to each roster."""
+    season = latest_roster_season()
+    standings = final_standings(season)
+
+    # Teams with a known finish first, in finishing order; anything unranked
+    # falls to the bottom in the model's own alphabetical-by-owner order rather
+    # than disappearing.
+    teams = sorted(
+        Team.objects.all(),
+        key=lambda team: (standings.get(team.pk) is None, standings.get(team.pk) or 0),
+    )
+    for team in teams:
+        team.rank = standings.get(team.pk)
+
     return render(
         request,
         'league/league_overview.html',
-        {'teams': teams, 'season': latest_roster_season()},
+        {'teams': teams, 'season': season, 'ranked': bool(standings)},
     )
 
 
@@ -684,6 +726,31 @@ def toggle_prediction(request):
                 ).delete()
 
     # Never redirect somewhere off-site just because a form said so.
+    target = request.POST.get('next') or ''
+    if not url_has_allowed_host_and_scheme(
+        target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        target = reverse('board')
+
+    return redirect(target)
+
+
+@login_required
+@require_POST
+def reset_board(request):
+    """Clear every lock this user has placed on the current season's board.
+
+    Deletes only `request.user`'s predictions -- the filter is the whole access
+    control, exactly as it is on the read side. Nobody can reset anyone else's
+    board, and there is no id in the request to tamper with.
+
+    The sandbox ticks are cleared by board.js at the same moment, because they
+    live in the browser and never reach the server at all.
+    """
+    season = keeper_season()
+    if season is not None:
+        KeeperPrediction.objects.filter(user=request.user, season=season).delete()
+
     target = request.POST.get('next') or ''
     if not url_has_allowed_host_and_scheme(
         target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
