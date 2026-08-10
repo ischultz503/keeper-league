@@ -2211,6 +2211,50 @@ class KeeperPredictionTests(TestCase):
         row = next(r for r in response.context['rows'] if r['round'] == round_number)
         return row['cells'][column]
 
+    # -- keeping your place across the reload --------------------------------
+
+    def test_a_cell_is_addressable_by_its_pick(self):
+        """The anchor the prediction forms point at has to exist."""
+        pick = DraftPick.objects.get(season=self.season, round=4, original_team=self.marcus)
+        html = self.client.get(reverse('board')).content.decode()
+
+        self.assertIn(f'id="pick-{pick.pk}"', html)
+
+    def test_a_prediction_form_comes_back_to_its_own_cell(self):
+        """Otherwise the reload lands at the top of the page -- which on a phone
+        also means back at the far left of the board."""
+        make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        pick = DraftPick.objects.get(season=self.season, round=4, original_team=self.marcus)
+        html = self.client.get(reverse('board')).content.decode()
+
+        self.assertIn(f'name="next" value="/#pick-{pick.pk}"', html)
+
+    def test_the_redirect_keeps_the_fragment(self):
+        """Django's own safe-redirect check must not object to an anchor -- if
+        it did, every lock would silently bounce to the bare board."""
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        pick = DraftPick.objects.get(season=self.season, round=4, original_team=self.marcus)
+
+        response = self.client.post(
+            reverse('toggle_prediction'),
+            {'lock': jsn.pk, 'next': f'/#pick-{pick.pk}'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], f'/#pick-{pick.pk}')
+
+    def test_an_offsite_next_is_still_refused_with_a_fragment_on_it(self):
+        """The anchor must not become a way to smuggle a redirect past the
+        host check."""
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+
+        response = self.client.post(
+            reverse('toggle_prediction'),
+            {'lock': jsn.pk, 'next': 'https://evil.example/#pick-1'},
+        )
+
+        self.assertEqual(response['Location'], reverse('board'))
+
     # -- locking ------------------------------------------------------------
 
     def test_locking_a_rivals_player_fills_its_cost_cell(self):

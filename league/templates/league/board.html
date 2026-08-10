@@ -47,6 +47,16 @@
     {% endif %}
     <button type="button" class="board-btn ghost" id="clear-sim-btn" hidden>Clear simulation</button>
 
+    {% comment %}
+      Phone only (hidden by CSS above 700px). The board scrolls inside its own
+      box, which means the PAGE is exactly viewport-wide -- and a browser will
+      not pinch-zoom out past that, so there is no way to see all ten teams at
+      once. This is that way: it squeezes the ten columns back to fit, small
+      but whole, for getting your bearings before scrolling back in.
+    {% endcomment %}
+    <button type="button" class="board-btn ghost" id="fit-btn"
+            aria-pressed="false">Fit all 10 teams</button>
+
     {% if not revealed %}
       {% comment %}
         A real form, not a fetch: this one writes (it deletes your locks), and
@@ -177,6 +187,7 @@
                 {% if cell.keeper %}
                   {% with player=cell.keeper.roster_entry.player %}
                     <td class="cell filled locked pos-bg-{{ player.position }}{% if cell.is_own %} own-col{% endif %}{% if cell.called %} called{% endif %}"
+                        id="pick-{{ cell.pick.pk }}"
                         data-pick-id="{{ cell.pick.pk }}" data-round="{{ cell.pick.round }}">
                       <span class="pick-label">{{ cell.label }}</span>
                       {% if cell.traded_to %}<span class="badge" title="Traded to {{ cell.traded_to.name }}">&rarr; {{ cell.traded_to.owner_name }}</span>{% endif %}
@@ -193,6 +204,7 @@
                 {% elif cell.prediction %}
                   {% with player=cell.prediction.entry.player %}
                     <td class="cell filled locked predicted pos-bg-{{ player.position }}{% if cell.is_own %} own-col{% endif %}"
+                        id="pick-{{ cell.pick.pk }}"
                         data-pick-id="{{ cell.pick.pk }}" data-round="{{ cell.pick.round }}">
                       <details class="cell-pop">
                         <summary>
@@ -202,7 +214,14 @@
                         </summary>
                         <form class="pop-menu" method="post" action="{% url 'toggle_prediction' %}">
                           {% csrf_token %}
-                          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                          {% comment %}
+                            The redirect carries this cell's own anchor, so the
+                            reload lands back on the pick you just changed
+                            instead of at the top of the page. Without it a tap
+                            on a Round 8 cell throws you to the title -- and on
+                            a phone, back across the board sideways as well.
+                          {% endcomment %}
+                          <input type="hidden" name="next" value="{{ request.get_full_path }}#pick-{{ cell.pick.pk }}">
                           <p class="pop-head">Your call: costs Round {{ cell.prediction.cost_round }}</p>
                           <button class="pop-item unlock" name="unlock" value="{{ cell.prediction.entry.pk }}">Unlock this pick</button>
                         </form>
@@ -212,6 +231,7 @@
 
                 {% else %}
                   <td class="cell{% if cell.is_own %} own-col{% endif %}{% if cell.traded_to %} traded{% endif %}"
+                      id="pick-{{ cell.pick.pk }}"
                       data-pick-id="{{ cell.pick.pk }}" data-round="{{ cell.pick.round }}">
                     {% if cell.predictable and cell.candidates %}
                       {% comment %}
@@ -228,7 +248,8 @@
                         </summary>
                         <form class="pop-menu" method="post" action="{% url 'toggle_prediction' %}">
                           {% csrf_token %}
-                          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                          {# Same anchor trick as the unlock form above. #}
+                          <input type="hidden" name="next" value="{{ request.get_full_path }}#pick-{{ cell.pick.pk }}">
                           <p class="pop-head">{{ cell.team.owner_name }} keeps here?</p>
                           {% for cand in cell.candidates %}{% include "league/_pop_item.html" %}{% endfor %}
                           {% for cand in cell.extra_candidates %}{% include "league/_pop_item.html" %}{% endfor %}

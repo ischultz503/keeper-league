@@ -575,6 +575,12 @@ table.board thead th.round-head { z-index: 4; }
   /* Taller than the names strictly need, because a cell also has to hold three
      candidate rows and the "+N more" line under them at the new size. */
   height: 5.1rem;
+  /* Locking a prediction reloads the page and comes back to #pick-N. Without
+     this the anchored cell lands hard against the top edge (and under the
+     header); the margin gives it somewhere to sit with its neighbours in view.
+     Honoured on the horizontal scroll of .board-scroll too, which is what stops
+     the cell arriving flush against the pinned round column. */
+  scroll-margin: 5rem 0 0 4rem;
   padding: 0.9rem 0.35rem 0.25rem;
   border-radius: 5px;
   background: var(--board-cell);
@@ -1052,8 +1058,10 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 }
 
 /* Only shown on a phone, where the board no longer fits and swiping it
-   sideways is not obvious from a grid whose left column never moves. */
+   sideways is not obvious from a grid whose left column never moves.
+   Same for the fit toggle: above 700px all ten columns are there already. */
 .board-hint { display: none; }
+#fit-btn { display: none; }
 
 @media (max-width: 860px) {
   .board-layout { flex-direction: column; }
@@ -1069,6 +1077,8 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
    still fit there, with no scrolling. */
 @media (max-width: 700px) {
   main.wide { padding-left: 0.6rem; padding-right: 0.6rem; }
+
+  #fit-btn { display: inline-block; }
 
   .board-hint {
     display: block;
@@ -1128,6 +1138,36 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
   /* The sandbox tick is the smallest target on the page by some way. */
   .sandbox-list label { padding: 0.55rem 0.3rem; }
   .sandbox-list input[type="checkbox"] { width: 1.15rem; height: 1.15rem; }
+
+  /* "Fit all 10 teams" -- the overview mode, toggled by board.js.
+     Everything the scrolling view spends on legibility is handed back here:
+     the minimum width, the type, the cell height, and the NFL team code beside
+     each candidate. At ~32px a column no name survives anyway, and what this
+     mode is actually for is shape -- which slots are spoken for, and by which
+     position. Colour still carries that at any size. */
+  .board-scroll.fit table.board { min-width: 0; width: 100%; }
+  .board-scroll.fit .cell { height: 4rem; }
+  .board-scroll.fit .filled-name { font-size: 0.62rem; }
+  .board-scroll.fit .filled-sub { font-size: 0.5rem; }
+  .board-scroll.fit .burn-tag { font-size: 0.58rem; }
+  .board-scroll.fit .burn-tag em { font-size: 0.5rem; }
+  .board-scroll.fit .cell .cand { font-size: 0.52rem; line-height: 1.3; }
+  .board-scroll.fit .cand-team { display: none; }
+  .board-scroll.fit .more-count { font-size: 0.5rem; }
+  .board-scroll.fit .pick-label { font-size: 0.48rem; }
+  .board-scroll.fit thead th { font-size: 0.52rem; padding: 0.3rem 0.15rem; }
+  .board-scroll.fit .slot-num { font-size: 0.48rem; }
+
+  /* Nothing scrolls sideways in this mode, so the pinned column has nothing to
+     cast a shadow over. */
+  .board-scroll.fit th.round-head {
+    width: 1.7rem;
+    font-size: 0.62rem;
+    box-shadow: none;
+  }
+
+  /* "Swipe the board sideways" is a lie once it all fits. */
+  body:has(.board-scroll.fit) .board-hint { display: none; }
 }
 
 

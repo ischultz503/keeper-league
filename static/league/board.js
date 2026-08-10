@@ -37,6 +37,8 @@
   var countLabel = document.getElementById('pick-count');
   var title = document.getElementById('pick-modal-title');
   var filters = document.getElementById('pick-filters');
+  var boardScroll = document.querySelector('.board-scroll');
+  var fitBtn = document.getElementById('fit-btn');           // phone only
 
   /* Mock-draft state, declared here for the same reason: clearing the
    * simulation reads it, and that can happen during start-up, before the
@@ -753,6 +755,90 @@
 
     restoreMock();
     updateMockButtons();
+  }
+
+  /* --- Keeping your place across a prediction ----------------------------- */
+
+  /* Locking or unlocking a prediction is a form POST and a redirect, because
+   * one lock can move that team's other predictions and only the engine knows
+   * where they land (see the note on the form in board.html). So the page
+   * genuinely does reload -- what it must not do is lose where you were.
+   *
+   * Two mechanisms, deliberately:
+   *   * the redirect carries #pick-N, so a browser with no JavaScript still
+   *     comes back to the cell you tapped rather than the top of the page;
+   *   * this, which remembers the exact offsets -- including how far the board
+   *     was scrolled sideways, which no anchor can express -- so on a phone
+   *     nothing appears to move at all.
+   *
+   * sessionStorage and read once: this must fire after a prediction, and never
+   * on a fresh visit to the board. */
+  var scrollKey = 'keeper-board-scroll';
+
+  document.addEventListener('submit', function (event) {
+    var form = event.target;
+    if (!form.classList || !form.classList.contains('pop-menu')) return;
+    try {
+      sessionStorage.setItem(scrollKey, JSON.stringify({
+        y: window.scrollY,
+        x: boardScroll ? boardScroll.scrollLeft : 0
+      }));
+    } catch (e) { /* private mode: fall back to the #pick-N anchor */ }
+  });
+
+  (function restoreScroll() {
+    var saved = null;
+    try {
+      saved = JSON.parse(sessionStorage.getItem(scrollKey) || 'null');
+      sessionStorage.removeItem(scrollKey);       // one shot, read at load
+    } catch (e) {
+      return;
+    }
+    if (!saved) return;
+
+    // On load rather than now: the browser does its own jump to #pick-N around
+    // parse time, and whichever moves last wins. This is the more precise of
+    // the two, so it goes second.
+    window.addEventListener('load', function () {
+      requestAnimationFrame(function () {
+        if (boardScroll && typeof saved.x === 'number') boardScroll.scrollLeft = saved.x;
+        if (typeof saved.y === 'number') window.scrollTo(0, saved.y);
+      });
+    });
+  })();
+
+  /* --- Fit the whole board on a phone ------------------------------------- */
+
+  /* The board scrolls inside its own box, which makes the PAGE exactly as wide
+   * as the viewport -- and no browser will pinch-zoom out past that. So there
+   * is no gesture that shows all ten teams at once; this button is the
+   * substitute. It squeezes the columns back to fit, small but whole, for
+   * getting your bearings before scrolling back in to read.
+   *
+   * Remembered for the tab, so locking a prediction does not silently drop you
+   * back to the scrolling view. */
+  var fitKey = 'keeper-board-fit';
+
+  function applyFit(on) {
+    if (!boardScroll || !fitBtn) return;
+    boardScroll.classList.toggle('fit', on);
+    fitBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    fitBtn.textContent = on ? 'Back to readable size' : 'Fit all 10 teams';
+  }
+
+  if (fitBtn && boardScroll) {
+    var fitOn = false;
+    try { fitOn = sessionStorage.getItem(fitKey) === '1'; } catch (e) { /* no storage */ }
+    applyFit(fitOn);
+
+    fitBtn.addEventListener('click', function () {
+      fitOn = !fitOn;
+      applyFit(fitOn);
+      try { sessionStorage.setItem(fitKey, fitOn ? '1' : '0'); } catch (e) { /* no storage */ }
+      // Squeezing the columns leaves the sideways scroll pointing at a column
+      // that is no longer there, and there is nothing to scroll to anyway.
+      if (fitOn) boardScroll.scrollLeft = 0;
+    });
   }
 
   /* --- Reset ------------------------------------------------------------- */
