@@ -25,6 +25,7 @@ from . import keeper_engine as engine
 from .models import (
     DraftPick,
     DraftSlot,
+    KeeperPrediction,
     KeeperSelection,
     PickTrade,
     Player,
@@ -1312,6 +1313,191 @@ class BoardViewTests(TestCase):
 
         players = self.client.get(reverse('board')).context['sandbox_players']
         self.assertEqual([p['entry'].pk for p in players], [mine.pk])
+
+
+class KeeperPredictionTests(TestCase):
+    """Part C: private per-user calls on other teams' cells."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.roster_season = Season.objects.create(year=2025)
+        cls.season = Season.objects.create(year=2026)
+        cls.teams = make_teams()
+        make_draft(cls.season, cls.teams)
+        cls.isaac = cls.teams['Isaac']
+        cls.marcus = cls.teams['Marcus']
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+        self.client.force_login(self.user)
+
+    def lock(self, entry, follow=False):
+        return self.client.post(
+            reverse('toggle_prediction'), {'lock': entry.pk, 'next': reverse('board')},
+            follow=follow,
+        )
+
+    def unlock(self, entry):
+        return self.client.post(
+            reverse('toggle_prediction'), {'unlock': entry.pk, 'next': reverse('board')}
+        )
+
+    def cell_for(self, response, round_number, team):
+        column = [s.team_id for s in response.context['slots']].index(team.pk)
+        row = next(r for r in response.context['rows'] if r['round'] == round_number)
+        return row['cells'][column]
+
+    # -- locking ------------------------------------------------------------
+
+    def test_locking_a_rivals_player_fills_its_cost_cell(self):
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.lock(jsn)
+
+        cell = self.cell_for(self.client.get(reverse('board')), 4, self.marcus)
+        self.assertIsNotNone(cell['prediction'])
+        self.assertEqual(cell['prediction']['entry'], jsn)
+
+    def test_a_locked_player_stops_being_offered_as_a_candidate(self):
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.lock(jsn)
+
+        cell = self.cell_for(self.client.get(reverse('board')), 4, self.marcus)
+        self.assertNotIn(jsn.pk, [c['entry'].pk for c in cell['candidates']])
+
+    def test_unlocking_restores_the_candidate(self):
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.lock(jsn)
+        self.unlock(jsn)
+
+        cell = self.cell_for(self.client.get(reverse('board')), 4, self.marcus)
+        self.assertIsNone(cell['prediction'])
+        self.assertIn(jsn.pk, [c['entry'].pk for c in cell['candidates']])
+
+    def test_locking_twice_does_not_duplicate(self):
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.lock(jsn)
+        self.lock(jsn)
+
+        self.assertEqual(KeeperPrediction.objects.count(), 1)
+
+    def test_two_predictions_at_the_same_cost_round_collide(self):
+        """Predictions run through the engine as a SET, so the second guess at
+        Round 8 walks to Round 7 exactly as a real keeper pair would."""
+        first = make_entry(self.roster_season, self.marcus, 'Rashee Clone', 8)
+        second = make_entry(self.roster_season, self.marcus, 'Khalil Clone', 10)
+        self.lock(first)
+        self.lock(second)
+
+        response = self.client.get(reverse('board'))
+        rounds = {
+            r: self.cell_for(response, r, self.marcus)['prediction'] for r in (7, 8)
+        }
+        self.assertIsNotNone(rounds[8])
+        self.assertIsNotNone(rounds[7])
+        self.assertEqual(rounds[7]['via'], engine.VIA_COLLISION)
+
+    def test_an_illegal_predicted_set_warns_but_still_locks(self):
+        """You are allowed to predict that a rival does something illegal."""
+        jeanty = make_entry(self.roster_season, self.marcus, 'Ashton Clone', 2)
+        bowers = make_entry(self.roster_season, self.marcus, 'Brock Clone', 2)
+        self.lock(jeanty)
+        self.lock(bowers)
+
+        response = self.client.get(reverse('board'))
+        self.assertEqual(KeeperPrediction.objects.count(), 2)
+        warnings = response.context['team_warnings'].get(self.marcus.pk)
+        self.assertTrue(warnings)
+        self.assertTrue(any('Rounds 1-2' in w for w in warnings))
+
+    # -- privacy ------------------------------------------------------------
+
+    def test_a_users_predictions_are_invisible_to_everyone_else(self):
+        """The whole point: nobody can see what anyone else has called."""
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.lock(jsn)
+
+        other_user = get_user_model().objects.create_user('chris', password='test-pass-1234')
+        self.teams['Chris'].user = other_user
+        self.teams['Chris'].save(update_fields=['user'])
+
+        self.client.force_login(other_user)
+        response = self.client.get(reverse('board'))
+
+        self.assertIsNone(self.cell_for(response, 4, self.marcus)['prediction'])
+        self.assertEqual(response.context['prediction_count'], 0)
+
+    def test_one_user_cannot_unlock_anothers_prediction(self):
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.lock(jsn)
+
+        other_user = get_user_model().objects.create_user('chris', password='test-pass-1234')
+        self.client.force_login(other_user)
+        self.client.post(
+            reverse('toggle_prediction'), {'unlock': jsn.pk, 'next': reverse('board')}
+        )
+
+        self.assertTrue(
+            KeeperPrediction.objects.filter(user=self.user, roster_entry=jsn).exists()
+        )
+
+    def test_two_users_can_predict_the_same_player_independently(self):
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.lock(jsn)
+
+        other_user = get_user_model().objects.create_user('chris', password='test-pass-1234')
+        self.client.force_login(other_user)
+        self.lock(jsn)
+
+        self.assertEqual(KeeperPrediction.objects.filter(roster_entry=jsn).count(), 2)
+
+    # -- own team is excluded ----------------------------------------------
+
+    def test_a_manager_cannot_lock_a_player_on_their_own_team(self):
+        """Rules section 1: a real keeper plan must not exist in the database
+        before the deadline. Own-team planning stays in the sandbox."""
+        mine = make_entry(self.roster_season, self.isaac, 'My Guy', 4)
+        self.lock(mine)
+
+        self.assertEqual(KeeperPrediction.objects.count(), 0)
+
+    def test_own_team_cells_are_not_clickable(self):
+        make_entry(self.roster_season, self.isaac, 'My Guy', 4)
+        make_entry(self.roster_season, self.marcus, 'Their Guy', 4)
+
+        response = self.client.get(reverse('board'))
+        self.assertFalse(self.cell_for(response, 4, self.isaac)['predictable'])
+        self.assertTrue(self.cell_for(response, 4, self.marcus)['predictable'])
+
+    # -- endpoint hygiene ---------------------------------------------------
+
+    def test_anonymous_users_cannot_toggle(self):
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        self.client.logout()
+        self.client.post(reverse('toggle_prediction'), {'lock': jsn.pk})
+
+        self.assertEqual(KeeperPrediction.objects.count(), 0)
+
+    def test_get_is_not_allowed(self):
+        self.assertEqual(self.client.get(reverse('toggle_prediction')).status_code, 405)
+
+    def test_an_off_site_next_is_ignored(self):
+        """A form-supplied redirect target must never leave the site."""
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        response = self.client.post(
+            reverse('toggle_prediction'),
+            {'lock': jsn.pk, 'next': 'https://evil.example.com/steal'},
+        )
+        self.assertEqual(response['Location'], reverse('board'))
+
+    def test_a_good_next_is_honoured(self):
+        jsn = make_entry(self.roster_season, self.marcus, 'Jaxon Smith-Njigba', 4)
+        response = self.client.post(
+            reverse('toggle_prediction'),
+            {'lock': jsn.pk, 'next': '/board/?rounds=all'},
+        )
+        self.assertEqual(response['Location'], '/board/?rounds=all')
 
 
 class KeeperPreviewApiTests(TestCase):

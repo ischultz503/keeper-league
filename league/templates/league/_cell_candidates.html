@@ -1,0 +1,12 @@
+{% comment %}
+  The candidate names shown inside a board cell: the first three, plus a quiet
+  expander for the rest. Expects `cell` from the board view.
+{% endcomment %}
+{% if cell.candidates %}
+  <ul class="cands">
+    {% for cand in cell.candidates %}{% include "league/_candidate.html" %}{% endfor %}
+  </ul>
+  {% if cell.extra_candidates %}
+    <span class="more-count">+{{ cell.extra_candidates|length }} more</span>
+  {% endif %}
+{% endif %}

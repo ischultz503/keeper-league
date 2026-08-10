@@ -1,0 +1,12 @@
+{% comment %}
+  One choice in a cell's prediction menu. A submit button carrying its own
+  name/value, so the whole menu is a single form rather than one form per
+  candidate. Expects `cand` from the board view.
+{% endcomment %}
+<button class="pop-item" name="lock" value="{{ cand.entry.pk }}"
+        {% if cand.walked %}title="Costs Round {{ cand.cost_round }}; burns Round {{ cand.placed_round }} because that pick is gone"{% endif %}>
+  <span class="pop-pos pos-bg-{{ cand.entry.player.position }}">{{ cand.entry.player.position }}</span>
+  <span class="pop-name">{{ cand.entry.player.name }}</span>
+  {% if cand.entry.player.nfl_team %}<span class="pop-team">{{ cand.entry.player.nfl_team }}</span>{% endif %}
+  <span class="pop-cost">R{{ cand.cost_round }}{% if cand.walked %}&rarr;{{ cand.placed_round }}{% endif %}</span>
+</button>

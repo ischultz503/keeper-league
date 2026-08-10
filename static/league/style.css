@@ -461,6 +461,112 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
   opacity: 0.85;
 }
 
+/* Prediction popover ------------------------------------------------------ */
+
+.cell-pop { position: static; }
+
+.cell-pop > summary {
+  display: block;
+  cursor: pointer;
+  list-style: none;
+  height: 100%;
+}
+
+.cell-pop > summary::-webkit-details-marker { display: none; }
+.cell:has(.cell-pop) { padding: 0; }
+.cell-pop > summary { padding: 0.9rem 0.35rem 0.25rem; }
+.cell-pop[open] > summary { outline: 2px solid #7ac8a0; outline-offset: -2px; border-radius: 5px; }
+
+/* The menu escapes the cell, which is why the cell does not clip it. */
+.cell:has(.cell-pop[open]) { overflow: visible; z-index: 20; }
+
+.pop-menu {
+  position: absolute;
+  top: calc(100% - 0.2rem);
+  left: 0;
+  z-index: 30;
+  min-width: 13rem;
+  padding: 0.4rem;
+  border-radius: 6px;
+  background: #12171c;
+  border: 1px solid #39434e;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  text-align: left;
+}
+
+.pop-head {
+  margin: 0 0 0.3rem;
+  padding: 0 0.2rem;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #74808d;
+}
+
+.pop-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.28rem 0.3rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: #dfe5ec;
+  font: inherit;
+  font-size: 0.72rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pop-item:hover { background: #232c35; }
+
+.pop-pos {
+  flex: 0 0 auto;
+  min-width: 2.1em;
+  padding: 0 0.25em;
+  border-radius: 2px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-align: center;
+  color: #fff;
+}
+
+.pop-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop-team { flex: 0 0 auto; font-size: 0.62rem; color: #8b97a4; font-weight: 700; }
+.pop-cost { flex: 0 0 auto; font-size: 0.66rem; font-weight: 700; color: #a9b4bf; }
+
+.pop-item.unlock { justify-content: center; color: #e08a8a; font-weight: 600; }
+.pop-item.unlock:hover { background: #32222a; }
+
+.more-count {
+  display: block;
+  padding-left: 0.25rem;
+  font-size: 0.6rem;
+  color: #6d7883;
+}
+
+/* A predicted cell is a call, not a fact: same colour, dashed ring. */
+.cell.predicted.locked {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.85);
+}
+
+.col-warn {
+  display: inline-block;
+  margin-left: 0.2rem;
+  width: 1rem;
+  height: 1rem;
+  line-height: 1rem;
+  border-radius: 50%;
+  background: #b4462f;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-align: center;
+  cursor: help;
+}
+
 /* Legend ------------------------------------------------------------------ */
 
 .board-legend {

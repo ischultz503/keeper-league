@@ -20,4 +20,7 @@ urlpatterns = [
     # JSON endpoint for the board's keeper sandbox. Namespaced under /api/ to
     # keep it obviously separate from the HTML pages.
     path('api/keeper-preview/', views.keeper_preview, name='keeper_preview'),
+    # Predictions are a plain form POST + redirect, not JSON: the engine has to
+    # re-place the whole team after every change.
+    path('predictions/toggle/', views.toggle_prediction, name='toggle_prediction'),
 ]

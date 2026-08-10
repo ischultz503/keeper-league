@@ -157,6 +157,45 @@ class RosterEntry(models.Model):
         return 'Eligible' if self.eligible else 'Not eligible'
 
 
+class KeeperPrediction(models.Model):
+    """One user's private guess that a rival will keep a particular player.
+
+    Strictly per-user: every read filters on request.user. Nothing here is
+    shared, aggregated, or visible to another manager -- two people can predict
+    the same player without ever knowing it.
+
+    Deliberately only ever covers OTHER teams. A manager's own keeper plan is
+    the one thing that must not exist in the database before the deadline
+    (rules section 1), so the own-team sandbox lives in page state alone.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='keeper_predictions'
+    )
+    season = models.ForeignKey(Season, on_delete=models.CASCADE, related_name='predictions')
+    roster_entry = models.ForeignKey(
+        RosterEntry, on_delete=models.CASCADE, related_name='predictions'
+    )
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['season', 'roster_entry']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'season', 'roster_entry'],
+                name='unique_prediction_per_user',
+            )
+        ]
+
+    def __str__(self):
+        return f'{self.user.username} predicts {self.roster_entry.player.name}'
+
+    @property
+    def player(self):
+        return self.roster_entry.player
+
+
 class DraftSlot(models.Model):
     """A team's position in one season's snake draft (section 6).
 

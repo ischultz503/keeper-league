@@ -6,12 +6,22 @@ from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.utils.safestring import mark_safe
 from django.views.decorators.http import require_POST
 
 from . import keeper_engine as engine
 from .keeper_engine import resolve_current_cost, times_kept_before
-from .models import DraftPick, DraftSlot, KeeperSelection, RosterEntry, Season, Team
+from .models import (
+    DraftPick,
+    DraftSlot,
+    KeeperPrediction,
+    KeeperSelection,
+    RosterEntry,
+    Season,
+    Team,
+)
 
 RULES_PATH = Path(settings.BASE_DIR) / 'docs' / 'keeper_rules_v3.md'
 
@@ -186,6 +196,13 @@ def board(request):
     #
     # Only the SOLO placement is shown. A second keeper's collision depends on
     # a set nobody outside that team knows, so it is not projected here.
+    # Private predictions about other teams, run through the engine per team so
+    # a rival's predicted SET resolves properly -- two guesses at the same cost
+    # round collide and the second walks earlier, exactly as a real set would.
+    predicted_by_pick, predicted_entry_ids, team_warnings = _place_predictions(
+        request.user, season, revealed
+    )
+
     candidates = {}
     if not revealed and roster_season is not None:
         burn_targets = _solo_burn_targets_by_team(season, picks, slots)
@@ -201,6 +218,11 @@ def board(request):
         for entry in entries:
             cost = costs[entry.pk]
             if not cost.keepable:
+                continue
+
+            # A locked prediction is shown in its own cell, not offered again
+            # as one possibility among many.
+            if entry.pk in predicted_entry_ids:
                 continue
 
             target = burn_targets.get(entry.team_id, {}).get(cost.cost_round)
@@ -222,6 +244,12 @@ def board(request):
     show_all_rounds = request.GET.get('rounds') == 'all'
     visible_rounds = rounds if show_all_rounds else rounds[:DEFAULT_VISIBLE_ROUNDS]
 
+    # Hang the warnings on the slot objects the header already loops over.
+    # Django templates cannot look a dict up by a variable key, and this beats
+    # inventing a template filter for one lookup.
+    for slot in slots:
+        slot.warnings = team_warnings.get(slot.team_id, [])
+
     team_count = len(slots)
     rows = []
     for round_number in visible_rounds:
@@ -239,12 +267,17 @@ def board(request):
             position_in_round = engine.snake_position_in_round(
                 slot.slot, round_number, team_count
             )
+            is_own = own_team is not None and slot.team_id == own_team.pk
             cells.append({
                 'pick': pick,
                 'team': slot.team,
-                'is_own': own_team is not None and slot.team_id == own_team.pk,
+                'is_own': is_own,
                 'traded_to': pick.current_team if pick.is_traded else None,
                 'keeper': kept_by_pick.get(pick.pk),
+                'prediction': predicted_by_pick.get(pick.pk),
+                # Own-team cells are never clickable: that plan stays in page
+                # state, never in the database.
+                'predictable': not is_own and not revealed,
                 'candidates': cell_candidates[:3],
                 'extra_candidates': cell_candidates[3:],
                 # "3.4" -- round 3, fourth pick of that round.
@@ -269,7 +302,50 @@ def board(request):
         'show_all_rounds': show_all_rounds,
         'total_rounds': len(rounds),
         'visible_round_count': len(visible_rounds),
+        'team_warnings': team_warnings,
+        'prediction_count': len(predicted_entry_ids),
     })
+
+
+def _place_predictions(user, season, revealed):
+    """Where this user's locked predictions land, and which sets are illegal.
+
+    Returns (by_pick_id, entry_ids, warnings_by_team). Every query is filtered
+    to `user` -- predictions are private, and nothing aggregates across users.
+    """
+    predictions = (
+        KeeperPrediction.objects
+        .filter(user=user, season=season)
+        .select_related('roster_entry__player', 'roster_entry__team', 'roster_entry__season')
+    )
+
+    by_team = {}
+    for prediction in predictions:
+        by_team.setdefault(prediction.roster_entry.team, []).append(prediction.roster_entry)
+
+    by_pick, entry_ids, warnings = {}, set(), {}
+
+    for team, entries in by_team.items():
+        entry_ids.update(entry.pk for entry in entries)
+
+        # The whole predicted set at once, so collisions and missing picks
+        # resolve against each other rather than one guess at a time.
+        result = engine.validate_keeper_set(team, season, entries)
+
+        for assignment in result.burned_picks:
+            if assignment.entry is not None:
+                by_pick[assignment.pick.pk] = {
+                    'entry': assignment.entry,
+                    'cost_round': assignment.cost_round,
+                    'via': assignment.via,
+                }
+
+        # An illegal guess is still a guess -- flag the column, do not refuse
+        # the lock.
+        if not result.valid:
+            warnings[team.pk] = result.errors
+
+    return by_pick, entry_ids, warnings
 
 
 def _solo_burn_targets_by_team(season, picks, slots):
@@ -391,6 +467,58 @@ def keeper_preview(request):
             for assignment in result.burned_picks
         ],
     })
+
+
+@login_required
+@require_POST
+def toggle_prediction(request):
+    """Lock or unlock a private prediction about another team's keeper.
+
+    A plain form POST rather than a JSON call: locking one player can move
+    where that team's OTHER predictions land (a second keeper at the same cost
+    round collides and walks earlier, rules section 3). Re-rendering server-side
+    keeps the engine the only thing that decides placement, instead of
+    reimplementing it in the browser.
+    """
+    lock_id = request.POST.get('lock')
+    unlock_id = request.POST.get('unlock')
+    season = keeper_season()
+    roster_season = latest_roster_season()
+
+    if season is None or roster_season is None:
+        return redirect('board')
+
+    own_team = _own_team(request)
+
+    if lock_id or unlock_id:
+        entry = (
+            RosterEntry.objects
+            .filter(pk=lock_id or unlock_id, season=roster_season)
+            .select_related('team')
+            .first()
+        )
+
+        # Predictions are about rivals. Refusing own-team locks here, not just
+        # in the template, is what actually keeps a manager's real keeper plan
+        # out of the database.
+        if entry is not None and not (own_team and entry.team_id == own_team.pk):
+            if lock_id:
+                KeeperPrediction.objects.get_or_create(
+                    user=request.user, season=season, roster_entry=entry
+                )
+            else:
+                KeeperPrediction.objects.filter(
+                    user=request.user, season=season, roster_entry=entry
+                ).delete()
+
+    # Never redirect somewhere off-site just because a form said so.
+    target = request.POST.get('next') or ''
+    if not url_has_allowed_host_and_scheme(
+        target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        target = reverse('board')
+
+    return redirect(target)
 
 
 @login_required

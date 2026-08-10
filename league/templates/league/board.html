@@ -100,6 +100,13 @@
             <th{% if own_team and slot.team_id == own_team.pk %} class="own-col"{% endif %}>
               <span class="slot-num">{{ slot.slot }}</span>
               {{ slot.team.owner_name }}
+              {% if slot.warnings %}
+                {% comment %}
+                  An illegal predicted set is flagged, never blocked -- you are
+                  allowed to guess that someone does something silly.
+                {% endcomment %}
+                <span class="col-warn" title="{% for problem in slot.warnings %}{{ problem }} {% endfor %}">!</span>
+              {% endif %}
             </th>
           {% endfor %}
         </tr>
@@ -116,35 +123,68 @@
               {% if not cell %}
                 <td class="cell empty"></td>
               {% else %}
-                <td class="cell{% if cell.is_own %} own-col{% endif %}{% if cell.keeper %} filled locked pos-bg-{{ cell.keeper.roster_entry.player.position }}{% endif %}{% if cell.traded_to %} traded{% endif %}"
-                    data-pick-id="{{ cell.pick.pk }}"
-                    data-round="{{ cell.pick.round }}">
-
-                  <span class="pick-label">{{ cell.label }}</span>
-
-                  {% if cell.traded_to %}
-                    <span class="badge" title="Traded to {{ cell.traded_to.name }}">&rarr; {{ cell.traded_to.owner_name }}</span>
-                  {% endif %}
-
-                  {% if cell.keeper %}
-                    {% with player=cell.keeper.roster_entry.player %}
+                {% if cell.keeper %}
+                  {% with player=cell.keeper.roster_entry.player %}
+                    <td class="cell filled locked pos-bg-{{ player.position }}{% if cell.is_own %} own-col{% endif %}"
+                        data-pick-id="{{ cell.pick.pk }}" data-round="{{ cell.pick.round }}">
+                      <span class="pick-label">{{ cell.label }}</span>
+                      {% if cell.traded_to %}<span class="badge" title="Traded to {{ cell.traded_to.name }}">&rarr; {{ cell.traded_to.owner_name }}</span>{% endif %}
                       <span class="filled-name">{{ player.name }}</span>
                       <span class="filled-sub">{{ player.position }}{% if player.nfl_team %} &ndash; {{ player.nfl_team }}{% endif %}</span>
-                    {% endwith %}
-                  {% elif cell.candidates %}
-                    <ul class="cands">
-                      {% for cand in cell.candidates %}{% include "league/_candidate.html" %}{% endfor %}
-                    </ul>
-                    {% if cell.extra_candidates %}
-                      <details class="more">
-                        <summary>+{{ cell.extra_candidates|length }} more</summary>
-                        <ul class="cands">
-                          {% for cand in cell.extra_candidates %}{% include "league/_candidate.html" %}{% endfor %}
-                        </ul>
+                    </td>
+                  {% endwith %}
+
+                {% elif cell.prediction %}
+                  {% with player=cell.prediction.entry.player %}
+                    <td class="cell filled locked predicted pos-bg-{{ player.position }}{% if cell.is_own %} own-col{% endif %}"
+                        data-pick-id="{{ cell.pick.pk }}" data-round="{{ cell.pick.round }}">
+                      <details class="cell-pop">
+                        <summary>
+                          <span class="pick-label">{{ cell.label }}</span>
+                          <span class="filled-name">{{ player.name }}</span>
+                          <span class="filled-sub">{{ player.position }}{% if player.nfl_team %} &ndash; {{ player.nfl_team }}{% endif %}{% if cell.prediction.via != 'base cost' %} &middot; {{ cell.prediction.via }}{% endif %}</span>
+                        </summary>
+                        <form class="pop-menu" method="post" action="{% url 'toggle_prediction' %}">
+                          {% csrf_token %}
+                          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                          <p class="pop-head">Your call: costs Round {{ cell.prediction.cost_round }}</p>
+                          <button class="pop-item unlock" name="unlock" value="{{ cell.prediction.entry.pk }}">Unlock this pick</button>
+                        </form>
                       </details>
+                    </td>
+                  {% endwith %}
+
+                {% else %}
+                  <td class="cell{% if cell.is_own %} own-col{% endif %}{% if cell.traded_to %} traded{% endif %}"
+                      data-pick-id="{{ cell.pick.pk }}" data-round="{{ cell.pick.round }}">
+                    {% if cell.predictable and cell.candidates %}
+                      {% comment %}
+                        A <details> disclosure, not a JS popover. Locking a
+                        prediction can move that team's other predictions, so
+                        the server re-places them -- which means this needs no
+                        JavaScript and still works if it fails to load.
+                      {% endcomment %}
+                      <details class="cell-pop">
+                        <summary>
+                          <span class="pick-label">{{ cell.label }}</span>
+                          {% if cell.traded_to %}<span class="badge" title="Traded to {{ cell.traded_to.name }}">&rarr; {{ cell.traded_to.owner_name }}</span>{% endif %}
+                          {% include "league/_cell_candidates.html" %}
+                        </summary>
+                        <form class="pop-menu" method="post" action="{% url 'toggle_prediction' %}">
+                          {% csrf_token %}
+                          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                          <p class="pop-head">{{ cell.team.owner_name }} keeps here?</p>
+                          {% for cand in cell.candidates %}{% include "league/_pop_item.html" %}{% endfor %}
+                          {% for cand in cell.extra_candidates %}{% include "league/_pop_item.html" %}{% endfor %}
+                        </form>
+                      </details>
+                    {% else %}
+                      <span class="pick-label">{{ cell.label }}</span>
+                      {% if cell.traded_to %}<span class="badge" title="Traded to {{ cell.traded_to.name }}">&rarr; {{ cell.traded_to.owner_name }}</span>{% endif %}
+                      {% include "league/_cell_candidates.html" %}
                     {% endif %}
-                  {% endif %}
-                </td>
+                  </td>
+                {% endif %}
               {% endif %}
             {% endfor %}
           </tr>
