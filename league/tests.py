@@ -929,9 +929,20 @@ class ImportAdpCsvTests(TestCase):
     """The CSV path -- the practical source, since the free API tier caps at 10."""
 
     def setUp(self):
+        # These three are ROSTERED, which is what makes them "ours" -- the
+        # stranded-without-ADP report is scoped to players with a roster entry,
+        # so free agents created by --create-missing cannot drown the signal.
+        season = Season.objects.create(year=2025)
+        team = Team.objects.create(name='Zimbo Baggins', owner_name='Isaac')
+
         self.jeanty = Player.objects.create(name='Ashton Jeanty', position='RB')
         self.etienne = Player.objects.create(name='Travis Etienne Jr.', position='RB')
         self.eagles = Player.objects.create(name='Eagles', position='DEF')
+
+        for player in (self.jeanty, self.etienne, self.eagles):
+            RosterEntry.objects.create(
+                season=season, team=team, player=player, draft_round=5
+            )
 
     def write_csv(self, rows, header='Rank,Player,Team,POS,AVG'):
         path = Path(tempfile.mkdtemp()) / 'adp.csv'
@@ -1047,6 +1058,86 @@ class ImportAdpCsvTests(TestCase):
         self.jeanty.refresh_from_db()
         self.assertIsNone(self.etienne.adp)
         self.assertEqual(self.jeanty.adp, 3.4)
+
+    def test_free_agents_are_not_created_by_default(self):
+        """The conservative behaviour stays the default; creating rows is opt-in."""
+        path = self.write_csv(['1,Some Rookie,KC,RB1,88.0'])
+        call_command('import_adp', csv=path, stdout=StringIO())
+
+        self.assertEqual(Player.objects.count(), 3)
+        self.assertFalse(Player.objects.filter(name='Some Rookie').exists())
+
+    def test_create_missing_adds_unrostered_players(self):
+        """Without these the simulator could only draft last season's rosters --
+        no rookies, no free agents."""
+        path = self.write_csv([
+            '1,Some Rookie,KC,RB1,8.0',
+            '2,Ashton Jeanty,LV,RB2,11.0',
+        ])
+        call_command('import_adp', csv=path, create_missing=True, stdout=StringIO())
+
+        rookie = Player.objects.get(name='Some Rookie')
+        self.assertEqual(rookie.position, 'RB')
+        self.assertEqual(rookie.nfl_team, 'KC')
+        self.assertEqual(rookie.adp, 8.0)
+        # Correctly has no roster entry -- that is what "free agent" means.
+        self.assertFalse(rookie.roster_entries.exists())
+
+    def test_create_missing_is_idempotent(self):
+        path = self.write_csv(['1,Some Rookie,KC,RB1,8.0'])
+        call_command('import_adp', csv=path, create_missing=True, stdout=StringIO())
+        call_command('import_adp', csv=path, create_missing=True, stdout=StringIO())
+
+        self.assertEqual(Player.objects.filter(name='Some Rookie').count(), 1)
+
+    def test_create_missing_respects_the_limit_taking_best_adp_first(self):
+        path = self.write_csv([
+            '1,Third Best,KC,RB1,30.0',
+            '2,Very Best,KC,RB2,5.0',
+            '3,Second Best,KC,RB3,10.0',
+        ])
+        call_command(
+            'import_adp', csv=path, create_missing=True,
+            create_missing_limit=2, stdout=StringIO(),
+        )
+
+        created = set(Player.objects.values_list('name', flat=True))
+        self.assertIn('Very Best', created)
+        self.assertIn('Second Best', created)
+        self.assertNotIn('Third Best', created)
+
+    def test_create_missing_never_deepens_an_ambiguity(self):
+        """Two rostered players already share a name. Adding a third would make
+        the ambiguity permanent, so that row is reported, not created."""
+        Player.objects.create(name='Michael Thomas', position='WR')
+        Player.objects.create(name='Michael Thomas', position='WR')
+        out = StringIO()
+
+        path = self.write_csv(['1,Michael Thomas,SF,WR1,44.0'])
+        call_command('import_adp', csv=path, create_missing=True, stdout=out)
+
+        self.assertEqual(Player.objects.filter(name='Michael Thomas').count(), 2)
+        self.assertIn('matched more than one', out.getvalue())
+
+    def test_duplicate_rows_in_one_file_create_one_player(self):
+        path = self.write_csv([
+            '1,Some Rookie,KC,RB1,8.0',
+            '2,Some Rookie,KC,RB2,9.0',
+        ])
+        call_command('import_adp', csv=path, create_missing=True, stdout=StringIO())
+
+        self.assertEqual(Player.objects.filter(name='Some Rookie').count(), 1)
+
+    def test_free_agents_do_not_drown_the_stranded_report(self):
+        """A created free agent with no ADP is noise; a rostered player without
+        one is the signal."""
+        out = StringIO()
+        path = self.write_csv(['1,Some Rookie,KC,RB1,8.0'])
+        call_command('import_adp', csv=path, create_missing=True, stdout=out)
+
+        output = out.getvalue()
+        self.assertIn('Ashton Jeanty', output)      # rostered, no ADP -> flagged
+        self.assertIn('created as free agents: 1', output)
 
     def test_a_csv_with_no_ordering_column_is_a_clean_error(self):
         path = self.write_csv(['Ashton Jeanty,LV'], header='Player,Team')

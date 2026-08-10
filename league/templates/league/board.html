@@ -63,7 +63,8 @@
           <label>
             <input type="checkbox" class="keeper-choice"
                    value="{{ row.entry.pk }}"
-                   data-player="{{ row.entry.player.name }}">
+                   data-player="{{ row.entry.player.name }}"
+                   data-position="{{ row.entry.player.position }}">
             <span class="swatch" aria-hidden="true"></span>
             <span class="pos pos-{{ row.entry.player.position }}">{{ row.entry.player.position }}</span>
             <span class="sandbox-name">{{ row.entry.player.name }}</span>
@@ -203,6 +204,7 @@
   <span><span class="legend-key pos-bg-DEF"></span>DEF</span>
   <span class="subtle">&middot;</span>
   <span>Solid = declared or locked</span>
+  <span><span class="legend-key legend-trying"></span>Dashed = your sandbox, not saved</span>
   <span><span class="legend-key legend-projected"></span>Muted = projection</span>
 </div>
 

@@ -33,7 +33,13 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
-from league.adp import build_index, find_player, normalize_position, split_player_and_team
+from league.adp import (
+    build_index,
+    candidates_for,
+    normalize_name,
+    normalize_position,
+    split_player_and_team,
+)
 from league.models import Player
 
 API_URL = 'https://api.fantasypros.com/public/v2/json/nfl/{season}/consensus-rankings'
@@ -90,6 +96,20 @@ class Command(BaseCommand):
             '--dry-run', action='store_true', help='Report matches without saving.'
         )
         parser.add_argument(
+            '--create-missing',
+            action='store_true',
+            help=(
+                'Create Player rows for ADP entries nobody rosters, so the draft '
+                'simulator can draw on rookies and free agents. Off by default.'
+            ),
+        )
+        parser.add_argument(
+            '--create-missing-limit',
+            type=int,
+            default=250,
+            help='Cap on rows created, taken in ADP order, best first (default 250).',
+        )
+        parser.add_argument(
             '--replace',
             action='store_true',
             help=(
@@ -114,7 +134,12 @@ class Command(BaseCommand):
 
         self.stdout.write(f'{len(rows)} rows from {source}')
         self.apply(
-            rows, value_keys, dry_run=options['dry_run'], replace=options['replace']
+            rows,
+            value_keys,
+            dry_run=options['dry_run'],
+            replace=options['replace'],
+            create_missing=options['create_missing'],
+            create_limit=options['create_missing_limit'],
         )
 
     def resolve_csv_value_keys(self, rows):
@@ -207,7 +232,8 @@ class Command(BaseCommand):
     # -- applying -----------------------------------------------------------
 
     @transaction.atomic
-    def apply(self, rows, value_keys, dry_run=False, replace=False):
+    def apply(self, rows, value_keys, dry_run=False, replace=False,
+              create_missing=False, create_limit=250):
         if replace and not dry_run:
             # Inside the same atomic block as the writes, so a failure part-way
             # cannot leave the table wiped.
@@ -218,7 +244,8 @@ class Command(BaseCommand):
         index = build_index(players)
         now = timezone.now()
 
-        matched, unmatched, skipped = [], [], 0
+        matched, unmatched, ambiguous, skipped = [], [], [], 0
+        creatable = []
 
         for row in rows:
             raw_name = first_value(row, NAME_KEYS + CSV_NAME_KEYS)
@@ -234,30 +261,91 @@ class Command(BaseCommand):
                 skipped += 1
                 continue
 
-            player = find_player(index, name, position)
-            if player is None:
-                # Only worth reporting for positions we actually roster.
-                if normalize_position(position) in Player.Position.values:
-                    unmatched.append(f'{name} ({position})')
+            found = candidates_for(index, name, position)
+            code = normalize_position(position)
+
+            if len(found) > 1:
+                # Never create a third row sharing an ambiguous name -- that
+                # would make the ambiguity permanent.
+                ambiguous.append(f'{name} ({position})')
                 continue
 
+            if not found:
+                if code in Player.Position.values:
+                    unmatched.append(f'{name} ({position})')
+                    creatable.append({
+                        'name': name, 'position': code,
+                        'nfl_team': (team or '').strip()[:4], 'adp': adp,
+                    })
+                continue
+
+            player = found[0]
             player.adp = adp
             player.nfl_team = (team or '').strip()[:4]
             player.adp_updated = now
             matched.append(player)
 
+        created = []
+        if create_missing:
+            created = self.create_free_agents(creatable, create_limit, now, dry_run)
+
         if not dry_run:
             Player.objects.bulk_update(matched, ['adp', 'nfl_team', 'adp_updated'])
 
-        self.report(matched, unmatched, skipped, dry_run)
+        self.report(matched, unmatched, ambiguous, skipped, created, dry_run)
 
-    def report(self, matched, unmatched, skipped, dry_run):
-        total = Player.objects.count()
+    def create_free_agents(self, creatable, limit, now, dry_run):
+        """Add Player rows for ADP entries nobody rosters.
+
+        These get no RosterEntry, which is exactly right -- they are free agents
+        and rookies, the pool the draft simulator picks from. Without them the
+        simulator could only ever draft last season's rostered players, so the
+        top of a simulated board would be conspicuously wrong.
+
+        Created best-ADP-first and capped, so a whole-NFL feed does not add a
+        thousand deep-bench kickers.
+        """
+        # Sort by ADP so the cap keeps the players who might actually be drafted.
+        ordered = sorted(creatable, key=lambda row: row['adp'])
+
+        seen = set()
+        to_create = []
+        for row in ordered:
+            # Two rows in one file could share a name; the index was built before
+            # the loop and would not know about the first.
+            key = (row['position'], normalize_name(row['name']))
+            if key in seen:
+                continue
+            seen.add(key)
+            to_create.append(Player(
+                name=row['name'], position=row['position'],
+                nfl_team=row['nfl_team'], adp=row['adp'], adp_updated=now,
+            ))
+            if len(to_create) >= limit:
+                break
+
+        if not dry_run:
+            Player.objects.bulk_create(to_create)
+
+        return to_create
+
+    def report(self, matched, unmatched, ambiguous, skipped, created, dry_run):
+        rostered = Player.objects.filter(roster_entries__isnull=False).distinct().count()
         self.stdout.write(
-            f'matched: {len(matched)} of {total} rostered players | '
-            f'rows for players nobody rosters: {len(unmatched)} (expected -- the '
-            f'file covers the whole NFL) | unusable rows: {skipped}'
+            f'matched: {len(matched)} | rows for players nobody rosters: '
+            f'{len(unmatched)} | created as free agents: {len(created)} | '
+            f'unusable rows: {skipped}'
         )
+        self.stdout.write(f'rostered players in the database: {rostered}')
+
+        if ambiguous:
+            self.stdout.write('')
+            self.stdout.write(self.style.WARNING(
+                f'{len(ambiguous)} row(s) matched more than one of our players and '
+                f'were left alone rather than guessed at:'
+            ))
+            for label in ambiguous[:10]:
+                self.stdout.write(f'    {label}')
 
         # The actionable signal is the inverse of "unmatched source rows": a
         # player of OURS with no ADP is the one that suggests a name mismatch.
@@ -266,7 +354,12 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING('\nDry run -- nothing saved.'))
             return
 
-        stranded = list(Player.objects.filter(adp__isnull=True))
+        # Restricted to ROSTERED players: with --create-missing the table also
+        # holds free agents, and a partial refresh could leave those without an
+        # ADP too. Those are noise; a rostered player with no ADP is the signal.
+        stranded = list(
+            Player.objects.filter(adp__isnull=True, roster_entries__isnull=False).distinct()
+        )
         if stranded:
             self.stdout.write('')
             self.stdout.write(self.style.WARNING(

@@ -103,11 +103,13 @@ def build_index(players):
     return index
 
 
-def find_player(index, name, position):
-    """The single Player matching this source row, or None.
+def candidates_for(index, name, position):
+    """Every Player this source row could refer to. Empty when it is unknown.
 
-    Returns None on an ambiguous match (two players sharing a normalized name
-    and position) rather than guessing -- the caller reports it for review.
+    Callers need "no such player" kept distinct from "more than one", because
+    those deserve opposite responses: the first may be safe to create as a free
+    agent, the second must never be -- adding a third row sharing the name would
+    make the ambiguity permanent.
     """
     position = normalize_position(position)
 
@@ -117,9 +119,17 @@ def find_player(index, name, position):
 
     for key in keys:
         found = index.get(key)
-        if found and len(found) == 1:
-            return found[0]
         if found:
-            return None      # ambiguous; better to report than to guess
+            return found
 
-    return None
+    return []
+
+
+def find_player(index, name, position):
+    """The single Player matching this source row, or None.
+
+    Returns None on an ambiguous match (two players sharing a normalized name
+    and position) rather than guessing -- the caller reports it for review.
+    """
+    found = candidates_for(index, name, position)
+    return found[0] if len(found) == 1 else None
