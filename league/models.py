@@ -603,3 +603,190 @@ class DraftPollAlternative(models.Model):
 
     def __str__(self):
         return f'{self.team.owner_name}: {self.text[:50]}'
+
+
+class RulesPoll(models.Model):
+    """The ballot for one season's rule changes (rules section 8).
+
+    A OneToOneField to Season for the same reason DraftPoll is one: two live
+    ballots and an argument about which one counted is a failure worth ruling
+    out at the database level.
+
+    SECRET while open, public once closed -- the deliberate opposite of
+    DraftPoll, which is public throughout. A scheduling grid you cannot see the
+    other rows of is just a form; a governance ballot you CAN see the other rows
+    of is a poll where voting last is worth something. See RulesVote, and
+    views.rules_vote for where that is actually enforced.
+
+    `closed` does two jobs: it stops writes and it reveals the results. One flag
+    carrying two meanings is normally worth splitting, but "the vote is over" and
+    "you can see the results" are the same moment in a ten-person league, and a
+    second `results_released` flag would mostly be a way to forget to tick it.
+    The tradeoff is noted here so a future reader knows it was a choice rather
+    than an oversight.
+    """
+
+    season = models.OneToOneField(
+        Season, on_delete=models.CASCADE, related_name='rules_poll'
+    )
+    intro = models.TextField(
+        blank=True,
+        help_text='Your note at the top of the ballot: what is being voted on and why.',
+    )
+    closed = models.BooleanField(
+        default=False,
+        help_text='Tick to stop all voting AND publish every vote to the league.',
+    )
+    effective_note = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text='When passed changes bite, e.g. "Passed changes apply to the 2026 draft".',
+    )
+    # Not in the original field list, and here because Part E's ballot copy has
+    # a closing observation that belongs to the ballot as a whole rather than to
+    # any one proposal ("with all three passed, the only shape the rules forbid
+    # is two cheap players"). Stuffing it into the intro would bury it above the
+    # proposals, where nobody has the context to read it yet.
+    closing_note = models.TextField(
+        blank=True,
+        help_text='A closing observation, printed under the last proposal.',
+    )
+
+    def __str__(self):
+        return f'{self.season.year} rules vote'
+
+
+class RulesProposal(models.Model):
+    """One rule change on the ballot: what it says now, what it would say.
+
+    `case_against` is not decoration. The commissioner proposes these and also
+    votes on them; a ballot that only argues one side is a leaflet. The model
+    allows it blank, but the seeded ballot never leaves it so.
+
+    `outcome` is recorded BY HAND after the vote. The app deliberately does not
+    compute it: section 8 says "majority vote" without saying majority of what --
+    the league, or the votes cast -- and an app that declares PASSED on a 4-3
+    split with three abstentions has invented a quorum rule nobody agreed to.
+    """
+
+    class Outcome(models.TextChoices):
+        PASSED = 'passed', 'Passed'
+        FAILED = 'failed', 'Failed'
+        WITHDRAWN = 'withdrawn', 'Withdrawn'
+
+    poll = models.ForeignKey(
+        RulesPoll, on_delete=models.CASCADE, related_name='proposals'
+    )
+    order = models.PositiveSmallIntegerField(
+        help_text='Position on the ballot. Also how proposals are referred to out loud.'
+    )
+    title = models.CharField(max_length=200)
+    rule_reference = models.CharField(
+        max_length=100, blank=True, help_text='e.g. "Section 4, first bullet".'
+    )
+    current_text = models.TextField(help_text='The rule as it stands today.')
+    proposed_text = models.TextField(help_text='What it would say instead.')
+    case_for = models.TextField()
+    case_against = models.TextField()
+    # Same reason as RulesPoll.closing_note: the ballot copy carries a neutral
+    # "worth knowing" paragraph per proposal (an interaction with another
+    # proposal, a definition) that is not an argument for either side. Folding
+    # it into one of the two cases would quietly hand that side the last word.
+    note = models.TextField(
+        blank=True,
+        help_text='Neutral context, printed between the two cases and the radios.',
+    )
+    outcome = models.CharField(
+        max_length=9,
+        choices=Outcome.choices,
+        blank=True,
+        default='',
+        help_text='Recorded by the commissioner after the vote. Blank = not recorded yet.',
+    )
+
+    class Meta:
+        ordering = ['order']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['poll', 'order'], name='unique_proposal_order_per_poll'
+            )
+        ]
+
+    def __str__(self):
+        return f'{self.order}. {self.title}'
+
+
+class RulesVote(models.Model):
+    """One team's position on one proposal.
+
+    Team-keyed for the three reasons set out on DraftPollVote -- the session
+    gives us a team, a ballot row IS a team, and Team survives the Cognito swap
+    that will replace User. Do not harmonise it to User.
+
+    ABSTAIN IS A STORED ROW; NOT HAVING VOTED IS THE ABSENCE OF ONE. That is the
+    opposite of DraftPollVote, where an absent row is the only spelling of "no
+    answer" and there is deliberately no fourth state. The two genuinely differ
+    here: "I have read this and I have no position" is a thing a person does on a
+    governance vote, and it is not the same as silence. The commissioner needs to
+    tell them apart to know who still needs chasing.
+
+    'for' is fine as a stored value -- it is a Python keyword, not a string
+    problem. Just never name a variable `for`.
+    """
+
+    class Choice(models.TextChoices):
+        FOR = 'for', 'For'
+        AGAINST = 'against', 'Against'
+        ABSTAIN = 'abstain', 'Abstain'
+
+    proposal = models.ForeignKey(
+        RulesProposal, on_delete=models.CASCADE, related_name='votes'
+    )
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='rules_votes')
+    choice = models.CharField(max_length=7, choices=Choice.choices)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['proposal', 'team__owner_name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['proposal', 'team'], name='unique_rules_vote_per_team'
+            )
+        ]
+
+    def __str__(self):
+        return f'{self.team.owner_name}: {self.get_choice_display()}'
+
+
+class RulesSuggestion(models.Model):
+    """One team's "anything else?" note on the ballot as a whole.
+
+    One editable row per team, replaced rather than appended, for exactly the
+    reasons on DraftPollAlternative -- and team-keyed for the reasons on
+    RulesVote.
+
+    One box for the whole ballot, not one per proposal. Ten managers writing a
+    paragraph each is something a person reads in a sitting; thirty threaded
+    comments is a forum, and this league does not need a forum. The placeholder
+    is what asks them to name which change they mean.
+    """
+
+    poll = models.ForeignKey(
+        RulesPoll, on_delete=models.CASCADE, related_name='suggestions'
+    )
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='rules_suggestions'
+    )
+    text = models.TextField()
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['team__owner_name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['poll', 'team'], name='unique_rules_suggestion_per_team'
+            )
+        ]
+
+    def __str__(self):
+        return f'{self.team.owner_name}: {self.text[:50]}'

@@ -32,6 +32,7 @@ from . import draft_sim
 from . import keeper_engine as engine
 from . import names
 from . import poll
+from . import rules_vote as ballot
 from . import views
 from .context_processors import nav_key
 from .forms import DraftPollAlternativeForm
@@ -48,6 +49,10 @@ from .models import (
     PickTrade,
     Player,
     RosterEntry,
+    RulesPoll,
+    RulesProposal,
+    RulesSuggestion,
+    RulesVote,
     Season,
     Team,
 )
@@ -4380,3 +4385,248 @@ class DraftPollAdminTests(TestCase):
 
     def test_votes_are_not_editable_from_the_poll_page(self):
         self.assertNotContains(self.change_page(), 'votes-0-answer')
+
+
+# --- The rules vote ---------------------------------------------------------
+
+
+def make_ballot(season, count=3, **kwargs):
+    """A rules poll with `count` proposals on it, numbered from 1."""
+    poll_row = RulesPoll.objects.create(season=season, **kwargs)
+    proposals = [
+        RulesProposal.objects.create(
+            poll=poll_row,
+            order=number,
+            title=f'Proposal {number}',
+            rule_reference=f'Section 4, bullet {number}',
+            current_text=f'The rule as it stands, {number}.',
+            proposed_text=f'What it would say instead, {number}.',
+            case_for=f'Why you might want this, {number}.',
+            case_against=f'Why you might not, {number}.',
+        )
+        for number in range(1, count + 1)
+    ]
+    return poll_row, proposals
+
+
+class RulesVoteLogicTests(SimpleTestCase):
+    """league/rules_vote.py: counting and wording, no database in sight."""
+
+    def test_each_choice_is_counted(self):
+        counts = ballot.count(['for', 'for', 'against', 'abstain'])
+        self.assertEqual(
+            (counts['for'], counts['against'], counts['abstain']), (2, 1, 1)
+        )
+
+    def test_cast_excludes_abstentions(self):
+        """"Cast" is how many teams took a position, which is the number the
+        two sides are actually compared against."""
+        self.assertEqual(ballot.count(['for', 'against', 'abstain'])['cast'], 2)
+
+    def test_an_unvoted_proposal_counts_nothing(self):
+        counts = ballot.count([])
+        self.assertEqual(
+            (counts['for'], counts['against'], counts['abstain'], counts['cast']),
+            (0, 0, 0, 0),
+        )
+
+    def test_nothing_here_decides_who_won(self):
+        """Section 8 does not define majority-of-what, so the app must not
+        either. No threshold, no verdict, no 'passed' key."""
+        self.assertNotIn('passed', ballot.count(['for', 'for', 'against']))
+
+    def test_turnout_reads_the_way_a_person_says_it(self):
+        self.assertEqual(ballot.turnout(10, 7), '7 of 10 managers have voted')
+
+    def test_turnout_stays_grammatical_at_one(self):
+        self.assertEqual(ballot.turnout(10, 1), '1 of 10 managers has voted')
+
+    def test_turnout_at_zero(self):
+        self.assertEqual(ballot.turnout(10, 0), '0 of 10 managers have voted')
+
+
+class RulesPollModelTests(TestCase):
+    """The four ballot models and the constraints that hold them together."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        self.poll, self.proposals = make_ballot(self.season)
+        self.isaac = self.teams['Isaac']
+
+    def test_one_ballot_per_season(self):
+        with self.assertRaises(IntegrityError):
+            RulesPoll.objects.create(season=self.season)
+
+    def test_two_proposals_cannot_share_a_position(self):
+        with self.assertRaises(IntegrityError):
+            RulesProposal.objects.create(
+                poll=self.poll, order=1, title='Sneaking in at number one',
+                current_text='x', proposed_text='y', case_for='a', case_against='b',
+            )
+
+    def test_proposals_come_back_in_ballot_order(self):
+        self.assertEqual(
+            [proposal.order for proposal in self.poll.proposals.all()], [1, 2, 3]
+        )
+
+    def test_a_team_votes_once_per_proposal(self):
+        RulesVote.objects.create(
+            proposal=self.proposals[0], team=self.isaac, choice='for'
+        )
+        with self.assertRaises(IntegrityError):
+            RulesVote.objects.create(
+                proposal=self.proposals[0], team=self.isaac, choice='against'
+            )
+
+    def test_a_vote_can_be_changed_and_changed_again(self):
+        """One row throughout: the constraint holds, and the last answer wins."""
+        for choice in ['for', 'against', 'abstain']:
+            RulesVote.objects.update_or_create(
+                proposal=self.proposals[0], team=self.isaac,
+                defaults={'choice': choice},
+            )
+
+        self.assertEqual(RulesVote.objects.count(), 1)
+        self.assertEqual(RulesVote.objects.get().choice, 'abstain')
+
+    def test_abstaining_stores_a_row_and_silence_does_not(self):
+        """The whole reason this differs from DraftPollVote: "I have read this
+        and I have no position" is not the same as not having answered."""
+        RulesVote.objects.create(
+            proposal=self.proposals[0], team=self.isaac, choice='abstain'
+        )
+
+        stored = RulesVote.objects.filter(proposal=self.proposals[0])
+        self.assertEqual(stored.count(), 1)
+        self.assertEqual(stored.get().team, self.isaac)
+
+    def test_an_abstention_counts_as_turnout_but_not_as_a_vote_cast(self):
+        """The distinction the commissioner chases people on: nine rows means
+        one person still to nudge, however they voted."""
+        for owner in OWNERS[:9]:
+            RulesVote.objects.create(
+                proposal=self.proposals[0], team=self.teams[owner], choice='abstain'
+            )
+
+        choices = list(
+            RulesVote.objects.filter(proposal=self.proposals[0])
+            .values_list('choice', flat=True)
+        )
+        counts = ballot.count(choices)
+
+        self.assertEqual(counts['abstain'], 9)
+        self.assertEqual(counts['cast'], 0)
+        self.assertEqual(ballot.turnout(10, len(choices)), '9 of 10 managers have voted')
+
+    def test_a_team_has_one_suggestion_note_per_ballot(self):
+        RulesSuggestion.objects.create(
+            poll=self.poll, team=self.isaac, text='Option C on proposal 3, please.'
+        )
+        with self.assertRaises(IntegrityError):
+            RulesSuggestion.objects.create(
+                poll=self.poll, team=self.isaac, text='Actually, never mind.'
+            )
+
+    def test_an_outcome_is_blank_until_the_commissioner_records_one(self):
+        self.assertEqual(self.proposals[0].outcome, '')
+
+    def test_a_proposal_names_itself_by_its_ballot_position(self):
+        self.assertEqual(str(self.proposals[1]), '2. Proposal 2')
+
+
+class RulesPollAdminTests(TestCase):
+    """What the commissioner sees while the vote is running -- and what he does not."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        self.poll, self.proposals = make_ballot(self.season)
+        self.staff = get_user_model().objects.create_superuser(
+            'commish', 'commish@example.com', 'test-pass-1234'
+        )
+        self.client.force_login(self.staff)
+
+    def change_page(self):
+        return self.client.get(
+            reverse('admin:league_rulespoll_change', args=[self.poll.pk])
+        )
+
+    def close(self):
+        self.poll.closed = True
+        self.poll.save(update_fields=['closed'])
+
+    def cast(self, owner, choice, proposal=None):
+        RulesVote.objects.create(
+            proposal=proposal or self.proposals[0],
+            team=self.teams[owner], choice=choice,
+        )
+
+    def test_the_proposals_are_written_on_the_ballots_own_page(self):
+        """A StackedInline: four TextFields in a tabular row is unusable."""
+        page = self.change_page()
+        self.assertContains(page, 'proposals-0-case_against')
+        self.assertContains(page, 'inline-related')
+
+    def test_the_outcome_is_recorded_on_that_same_screen(self):
+        self.assertContains(self.change_page(), 'proposals-0-outcome')
+
+    def test_an_open_ballot_shows_no_counts_to_the_commissioner_either(self):
+        """He votes in this league. A running count only he can see is a count
+        he votes with and nobody else has."""
+        self.cast('Isaac', 'for')
+        self.cast('Nick', 'against')
+        html = self.change_page().content.decode()
+
+        self.assertNotIn('1 for / 1 against', html)
+        self.assertNotIn('managers have voted', html)
+
+    def test_an_open_ballot_shows_who_still_needs_chasing(self):
+        self.cast('Isaac', 'for')
+        html = self.change_page().content.decode()
+
+        self.assertIn('Voted: Isaac', html)
+        self.assertIn('Still to vote:', html)
+        self.assertIn('Marcus', html)
+
+    def test_an_abstention_counts_as_having_voted_in_that_list(self):
+        self.cast('Isaac', 'abstain')
+        html = self.change_page().content.decode()
+
+        self.assertIn('Voted: Isaac', html)
+        # The other nine, alphabetically, with Isaac conspicuously absent.
+        self.assertIn(
+            'Still to vote: Chris, Jake, Luke, Marcus, Nick, Pechman, Ricky, '
+            'Rimler, Sonny',
+            html,
+        )
+
+    def test_closing_the_ballot_reveals_the_tallies(self):
+        self.cast('Isaac', 'for')
+        self.cast('Nick', 'against')
+        self.cast('Luke', 'abstain')
+        self.close()
+
+        html = self.change_page().content.decode()
+        self.assertIn('1 for / 1 against / 1 abstain', html)
+        self.assertIn('3 of 10 managers have voted', html)
+
+    def test_a_closed_ballot_reports_the_recorded_outcome(self):
+        self.close()
+        self.proposals[0].outcome = RulesProposal.Outcome.PASSED
+        self.proposals[0].save(update_fields=['outcome'])
+
+        html = self.change_page().content.decode()
+        self.assertIn('Outcome: Passed', html)
+        self.assertIn('Outcome: not recorded', html)
+
+    def test_votes_cannot_be_entered_by_hand(self):
+        response = self.client.get(reverse('admin:league_rulesvote_add'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_suggestions_cannot_be_entered_by_hand(self):
+        response = self.client.get(reverse('admin:league_rulessuggestion_add'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_votes_are_not_editable_from_the_ballot_page(self):
+        self.assertNotContains(self.change_page(), 'votes-0-choice')

@@ -15,10 +15,15 @@ from .models import (
     PickTrade,
     Player,
     RosterEntry,
+    RulesPoll,
+    RulesProposal,
+    RulesSuggestion,
+    RulesVote,
     Season,
     Team,
 )
 from .poll import format_slot, tally
+from .rules_vote import count as count_choices, turnout
 
 
 @admin.register(Season)
@@ -377,6 +382,145 @@ class DraftPollVoteAdmin(admin.ModelAdmin):
 @admin.register(DraftPollAlternative)
 class DraftPollAlternativeAdmin(admin.ModelAdmin):
     """The "when else?" notes. Read-only here for the same reason as the votes."""
+
+    list_display = ['poll', 'team', 'short_text', 'updated']
+    list_filter = ['poll']
+    readonly_fields = ['poll', 'team', 'text', 'updated']
+
+    @admin.display(description='Note')
+    def short_text(self, obj):
+        return obj.text[:80] + ('...' if len(obj.text) > 80 else '')
+
+    def has_add_permission(self, request):
+        return False
+
+
+class RulesProposalInline(admin.StackedInline):
+    """The proposals, written and later graded on the ballot's own screen.
+
+    A StackedInline, not the TabularInline the draft poll's times use. A tabular
+    row is one line per object with a column per field, which works for a date
+    and a short label -- but a proposal carries four TextFields of prose, and
+    four textareas squeezed into one table row is unusable at any window width.
+    Stacked gives each proposal a labelled block with full-width fields.
+
+    `outcome` is in the fieldset on purpose: after the vote, recording all three
+    results is then one screen and one Save.
+    """
+
+    model = RulesProposal
+    extra = 0
+    fields = [
+        'order', 'title', 'rule_reference',
+        'current_text', 'proposed_text',
+        'case_for', 'case_against', 'note',
+        'outcome',
+    ]
+
+
+@admin.register(RulesPoll)
+class RulesPollAdmin(admin.ModelAdmin):
+    """Where the commissioner writes the ballot, closes it, and records results."""
+
+    list_display = ['season', 'proposal_count', 'closed']
+    list_editable = ['closed']
+    list_display_links = ['season']
+    inlines = [RulesProposalInline]
+    readonly_fields = ['vote_summary']
+
+    @admin.display(description='Proposals')
+    def proposal_count(self, obj):
+        return obj.proposals.count()
+
+    @admin.display(description='Where the vote stands')
+    def vote_summary(self, obj):
+        """Who has voted while it is open; the full tallies once it is closed.
+
+        THE SECRET BALLOT APPLIES TO THIS SCREEN TOO, and that is not an
+        oversight to be tidied up later. The commissioner is a voting member of
+        this league. Letting him watch a running count that the other nine
+        cannot see means he votes with information nobody else has, which is
+        exactly the thing the page's secrecy is for. So while the poll is open
+        this shows names and only names -- who has voted, who has not -- which is
+        what he actually needs in order to chase people, and which gives away
+        nothing about how anyone voted.
+
+        Ticking `closed` is what releases the tallies, to him and to the league
+        at the same moment.
+        """
+        if obj.pk is None:
+            return 'Save the ballot first, then write the proposals below.'
+
+        proposals = list(obj.proposals.all())
+        if not proposals:
+            return 'No proposals yet. Add some below, then save.'
+
+        votes = list(
+            RulesVote.objects.filter(proposal__poll=obj).select_related('team')
+        )
+        by_proposal = {}
+        for vote in votes:
+            by_proposal.setdefault(vote.proposal_id, []).append(vote)
+
+        team_names = list(Team.objects.values_list('owner_name', flat=True))
+        lines = []
+
+        for proposal in proposals:
+            cast = by_proposal.get(proposal.pk, [])
+            lines.append(f'{proposal.order}. {proposal.title}')
+
+            if obj.closed:
+                counts = count_choices([vote.choice for vote in cast])
+                lines.append(
+                    f'   {counts["for"]} for / {counts["against"]} against / '
+                    f'{counts["abstain"]} abstain  --  '
+                    f'{turnout(len(team_names), len(cast))}'
+                )
+                lines.append(
+                    '   Outcome: '
+                    + (proposal.get_outcome_display() if proposal.outcome else 'not recorded')
+                )
+            else:
+                voted = sorted(vote.team.owner_name for vote in cast)
+                silent = sorted(set(team_names) - set(voted))
+                lines.append('   Voted: ' + (', '.join(voted) if voted else 'nobody yet'))
+                lines.append(
+                    '   Still to vote: '
+                    + (', '.join(silent) if silent else 'nobody -- all in')
+                )
+            lines.append('')
+
+        if not obj.closed:
+            lines.append(
+                'Choices and tallies stay hidden until you tick "closed" -- '
+                'including from you. See the docstring on this method.'
+            )
+
+        # A plain newline-joined string; the admin renders readonly text in a
+        # <div> that respects white-space, so no HTML (and no escaping worry).
+        return '\n'.join(lines)
+
+
+@admin.register(RulesVote)
+class RulesVoteAdmin(admin.ModelAdmin):
+    """The ballots, visible but never entered or edited from here.
+
+    Same reasoning as DraftPollVoteAdmin, and it bites harder on a governance
+    vote: an administrator who can quietly nudge an answer is not running a
+    vote. Managers vote on the site; this is the record.
+    """
+
+    list_display = ['proposal', 'team', 'choice', 'updated']
+    list_filter = ['proposal__poll', 'choice', 'team']
+    readonly_fields = ['proposal', 'team', 'choice', 'updated']
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(RulesSuggestion)
+class RulesSuggestionAdmin(admin.ModelAdmin):
+    """The "anything else?" notes. Read-only for the same reason as the votes."""
 
     list_display = ['poll', 'team', 'short_text', 'updated']
     list_filter = ['poll']
