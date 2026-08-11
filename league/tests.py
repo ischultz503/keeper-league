@@ -5104,6 +5104,101 @@ class RulesBallotSavingTests(TestCase):
         self.assertFalse(RulesSuggestion.objects.exists())
 
 
+class SeedRulesPollTests(TestCase):
+    """The 2026 ballot, as a command rather than a data migration."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        # keeper_season() is what the command seeds against.
+        make_draft(self.season, self.teams, rounds=1)
+
+    def seed(self, *args):
+        out = StringIO()
+        call_command('seed_rules_poll', *args, stdout=out)
+        return out.getvalue()
+
+    def test_it_seeds_three_proposals_against_the_drafted_season(self):
+        self.seed()
+
+        poll = RulesPoll.objects.get()
+        self.assertEqual(poll.season, self.season)
+        self.assertEqual([p.order for p in poll.proposals.all()], [1, 2, 3])
+
+    def test_the_ballot_opens_unclosed(self):
+        self.seed()
+        self.assertFalse(RulesPoll.objects.get().closed)
+
+    def test_every_proposal_argues_both_sides(self):
+        """The model allows a blank case_against. The ballot never does: a
+        ballot that only argues one side is a leaflet."""
+        self.seed()
+        for proposal in RulesProposal.objects.all():
+            with self.subTest(proposal=proposal.order):
+                self.assertTrue(proposal.case_for.strip())
+                self.assertTrue(proposal.case_against.strip())
+                self.assertTrue(proposal.current_text.strip())
+                self.assertTrue(proposal.proposed_text.strip())
+
+    def test_no_outcome_is_recorded_up_front(self):
+        self.seed()
+        self.assertEqual(
+            list(RulesProposal.objects.values_list('outcome', flat=True)), ['', '', '']
+        )
+
+    def test_the_intro_says_the_vote_is_secret(self):
+        self.seed()
+        self.assertIn('hidden from everyone', RulesPoll.objects.get().intro)
+
+    def test_the_closing_note_is_seeded_as_a_note_not_a_proposal(self):
+        self.seed()
+        self.assertEqual(RulesProposal.objects.count(), 3)
+        self.assertIn('two cheap players', RulesPoll.objects.get().closing_note)
+
+    def test_running_it_twice_changes_nothing(self):
+        self.seed()
+        second = self.seed()
+
+        self.assertEqual(RulesPoll.objects.count(), 1)
+        self.assertEqual(RulesProposal.objects.count(), 3)
+        self.assertIn('already there', second)
+
+    def test_a_wording_edited_in_the_admin_survives_a_re_run(self):
+        """Only ever creates. The commissioner's edit is the newer fact."""
+        self.seed()
+        proposal = RulesProposal.objects.get(order=1)
+        proposal.title = 'Tightened up by hand'
+        proposal.save(update_fields=['title'])
+
+        self.seed()
+        self.assertEqual(
+            RulesProposal.objects.get(order=1).title, 'Tightened up by hand'
+        )
+
+    def test_a_named_season_can_be_seeded_instead(self):
+        older = Season.objects.create(year=2025)
+        self.seed('--season', '2025')
+
+        self.assertEqual(RulesPoll.objects.get().season, older)
+
+    def test_an_unknown_season_is_refused_rather_than_invented(self):
+        with self.assertRaises(CommandError):
+            self.seed('--season', '2031')
+
+    def test_the_seeded_ballot_renders(self):
+        """The end of the job: a manager can actually read and vote on it."""
+        user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.teams['Isaac'].user = user
+        self.teams['Isaac'].save(update_fields=['user'])
+        self.seed()
+        self.client.force_login(user)
+
+        response = self.client.get(reverse('rules_vote'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.context['rows']), 3)
+        self.assertContains(response, 'Section 4, first bullet')
+
+
 class RulesPageCalloutTests(TestCase):
     """The rules page tells you when the rules are up for a vote."""
 
