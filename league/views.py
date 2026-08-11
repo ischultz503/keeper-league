@@ -1160,11 +1160,22 @@ def draft_poll(request):
         # trail of contradictions to reconcile.
         form = DraftPollAlternativeForm(request.POST, instance=mine)
         if form.is_valid():
-            note = form.save(commit=False)
-            note.poll = poll
-            note.team = own_team
-            note.save()
-            messages.success(request, 'Noted -- the commissioner sees these.')
+            # An empty box is a retraction, not an error. The note is optional
+            # -- it sits under the grid that is the point of the page -- so
+            # "nothing to add" has to be a thing you can submit, and the only
+            # sensible meaning for it is "take mine down".
+            if not form.cleaned_data['text']:
+                if mine is not None:
+                    mine.delete()
+                    messages.success(request, 'Your note has been taken down.')
+                else:
+                    messages.success(request, 'Nothing sent -- the box was empty.')
+            else:
+                note = form.save(commit=False)
+                note.poll = poll
+                note.team = own_team
+                note.save()
+                messages.success(request, 'Noted -- the commissioner sees these.')
             return redirect('draft_poll')
     else:
         form = DraftPollAlternativeForm(instance=mine)

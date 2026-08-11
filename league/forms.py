@@ -49,6 +49,12 @@ class DraftPollAlternativeForm(forms.ModelForm):
     `poll` and `team` are not fields: the view sets them from the poll it
     already loaded and from the session, so a forged POST body cannot file a
     note under somebody else's name.
+
+    The note is OPTIONAL, unlike the feedback form it is otherwise shaped like.
+    It sits under a grid that is the actual point of the page, and a required
+    field there means the button is dead until you have typed something you may
+    well not have to say. Submitting an empty box is how you retract a note you
+    left earlier -- see views.draft_poll, which does the deleting.
     """
 
     class Meta:
@@ -69,8 +75,18 @@ class DraftPollAlternativeForm(forms.ModelForm):
             ),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The model field is NOT NULL and not blank, so ModelForm builds it as
+        # required. Relaxing it here rather than on the model keeps the database
+        # honest -- a stored note always has words in it -- while letting the
+        # form accept an empty box and mean something by it.
+        self.fields['text'].required = False
+
     def clean_text(self):
-        text = self.cleaned_data['text'].strip()
-        if len(text) < 5:
-            raise forms.ValidationError('Tell us a little more than that.')
-        return text
+        """Whitespace only is the same as empty, and no minimum length.
+
+        The feedback box asks for five characters because a one-word bug report
+        helps nobody. Here "Sat" is a complete and useful answer.
+        """
+        return self.cleaned_data['text'].strip()

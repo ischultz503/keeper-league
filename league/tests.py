@@ -34,6 +34,7 @@ from . import names
 from . import poll
 from . import views
 from .context_processors import nav_key
+from .forms import DraftPollAlternativeForm
 from .models import (
     DraftPick,
     DraftPoll,
@@ -4291,12 +4292,34 @@ class DraftPollAlternativeTests(TestCase):
         self.assertEqual(self.send('One more idea.').status_code, 403)
         self.assertFalse(DraftPollAlternative.objects.exists())
 
-    def test_an_empty_note_is_rejected_and_the_form_comes_back(self):
-        response = self.send('  ')
+    def test_the_box_is_not_required(self):
+        """It sits under the grid that is the point of the page. A required
+        field there means the button is dead until you type something you may
+        have nothing to say."""
+        html = self.client.get(reverse('draft_poll')).content.decode()
+        textarea = html[html.index('<textarea'):html.index('</textarea>')]
 
-        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('required', textarea)
+        self.assertFalse(DraftPollAlternativeForm().fields['text'].required)
+
+    def test_an_empty_box_takes_my_note_back_down(self):
+        self.send('Any weeknight after 8.')
+        response = self.send('   ')
+
+        self.assertRedirects(response, reverse('draft_poll'))
         self.assertFalse(DraftPollAlternative.objects.exists())
-        self.assertTrue(response.context['form'].errors)
+
+    def test_an_empty_box_with_nothing_to_retract_is_harmless(self):
+        response = self.send('')
+
+        self.assertRedirects(response, reverse('draft_poll'))
+        self.assertFalse(DraftPollAlternative.objects.exists())
+
+    def test_a_short_answer_is_still_an_answer(self):
+        """"Sat" is complete and useful here, unlike in the feedback box."""
+        self.send('Sat')
+
+        self.assertEqual(DraftPollAlternative.objects.get().text, 'Sat')
 
 
 class DraftPollAdminTests(TestCase):
