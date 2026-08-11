@@ -1617,7 +1617,14 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 .poll-count.best { background: var(--accent-soft); color: var(--accent); }
 .poll-head.best { background: var(--accent-soft); }
 
-.poll-live { margin-top: 0.6rem; }
+/* Bigger and darker than the usual .note it shares a class with: it is the
+   only thing on the page that explains what clicking a cell does, and at the
+   muted 0.9rem the rest of the site uses for asides it read as fine print. */
+.poll-live {
+  margin-top: 0.6rem;
+  font-size: 1.05rem;
+  color: var(--ink);
+}
 
 .poll-alt { margin-top: 2rem; }
 .poll-alt h2 { font-size: 1.15rem; }

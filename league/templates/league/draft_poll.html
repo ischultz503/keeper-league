@@ -172,10 +172,7 @@
   </div>
 
   {% if own_team and not poll.closed %}
-    <p class="note poll-live">
-      Your answers save the moment you click. Everyone else's appear within
-      about fifteen seconds while this tab is open.
-    </p>
+    <p class="note poll-live">Your answers save the moment you click.</p>
   {% elif not own_team %}
     <p class="note">
       Your login has no team linked to it, so there is no row here to answer
@@ -204,7 +201,7 @@
         {{ form.text }}
       </p>
       <button type="submit" class="board-btn">
-        {% if form.instance.pk %}Update my note{% else %}Send it{% endif %}
+        {% if form.instance.pk %}Update Alternative Time{% else %}Send Alternative Time{% endif %}
       </button>
     </form>
   {% endif %}
