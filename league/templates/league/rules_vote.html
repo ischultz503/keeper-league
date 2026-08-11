@@ -26,16 +26,18 @@
   Each of these sentences stays on ONE source line: a sentence wrapped across
   two lines is a sentence no assertContains can find, which is how an earlier
   version of the draft poll's notice slipped past its own test.
+
+  A hardcoded banner used to sit in the {% templatetag openblock %} else {% templatetag closeblock %} branch here, telling voters the
+  ballot is secret now and public at close. Removed at Isaac's request: the
+  seeded intro above already says it in the commissioner's own words, and that
+  copy is editable in the admin, so keeping both meant saying it twice and being
+  able to change only one of them. Nothing about the behaviour changed --
+  secrecy is enforced in views.rules_vote, never by a paragraph.
 {% endcomment %}
 {% if poll.closed %}
   <p class="poll-closed">
     <strong>This vote is closed.</strong>
-    Every ballot below is now public, as promised while it was open.
-  </p>
-{% else %}
-  <p class="ballot-secrecy">
-    <strong>Your answers are hidden from everyone, including the commissioner, until this vote closes.</strong>
-    When it closes, every vote and every note becomes visible to the whole league &mdash; so vote as if it will be read, because it will be.
+    Every ballot below is now public.
   </p>
 {% endif %}
 

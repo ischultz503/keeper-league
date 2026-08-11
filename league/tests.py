@@ -4762,16 +4762,18 @@ class RulesBallotPageTests(TestCase):
             html.index('two cheap players'), html.index('Anything else?')
         )
 
-    def test_the_page_says_the_ballot_is_secret_now_and_public_later(self):
-        """People must know both halves BEFORE they vote, not after."""
-        response = self.get()
-        self.assertContains(
-            response,
-            '<strong>Your answers are hidden from everyone, including the '
-            'commissioner, until this vote closes.</strong>',
-            html=True,
-        )
-        self.assertContains(response, 'becomes visible to the whole league')
+    def test_the_page_carries_no_hardcoded_secrecy_banner(self):
+        """The "secret now, public later" wording lives in the editable intro.
+
+        It used to be hardcoded in rules_vote.html as well, which meant the page
+        said it twice and the commissioner could only edit one of them. Removed
+        deliberately; this asserts it stays removed rather than creeping back in
+        as a "helpful" addition. The seed command's own test still checks the
+        intro says it, and views.rules_vote is what actually keeps ballots
+        secret -- no paragraph ever did.
+        """
+        html = self.get().content.decode()
+        self.assertNotIn('class="ballot-secrecy"', html)
 
     def test_there_is_no_javascript_on_this_page(self):
         """Nothing to watch until it closes, so nothing to poll for."""

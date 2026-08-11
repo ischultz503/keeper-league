@@ -166,9 +166,15 @@ main {
 /* "You are here", drawn from the same attribute that announces it to a screen
    reader -- one source of truth, so the tick cannot drift from the semantics.
    The links no longer sit in the header where you could see which was
-   highlighted, so the menu has to answer it from the inside. */
+   highlighted, so the menu has to answer it from the inside.
+
+   The tick is written as the CSS escape \2713 rather than a literal check mark.
+   That keeps this file pure ASCII, which is not fussiness: the literal glyph was
+   here and had already been corrupted into a stray superscript-one by an
+   encoding round trip somewhere between a Windows checkout and this file. An
+   escape cannot be mangled that way. */
 .nav-panel [aria-current="page"] { background: rgba(255, 255, 255, 0.18); font-weight: 600; }
-.nav-panel [aria-current="page"]::after { content: " ¹3"; }
+.nav-panel [aria-current="page"]::after { content: " \2713"; }
 
 /* The logout form is still a form -- Django 5+ refuses a GET logout, so this
    cannot become a link. It only has to sit in the column looking like one. */
@@ -1641,15 +1647,10 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
   background: #fdf3e3;
 }
 
-/* The one thing on the ballot a manager must read before voting, so it gets the
-   accent bar rather than the muted .note treatment the rest of the asides use. */
-.ballot-secrecy {
-  max-width: 62ch;
-  padding: 0.6rem 0.9rem;
-  border-left: 3px solid var(--accent);
-  background: var(--accent-soft);
-  border-radius: 0 5px 5px 0;
-}
+/* .ballot-secrecy lived here, styling a hardcoded "secret now, public later"
+   banner on the rules vote. The banner was removed -- the same wording is in the
+   poll's editable intro -- so the rule went with it rather than sitting here
+   matching nothing. rules_vote.html says why at the point it was removed. */
 
 .proposal {
   margin: 1.6rem 0;
