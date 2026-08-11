@@ -131,38 +131,10 @@ code { background: #eef0f3; padding: 0.1em 0.35em; border-radius: 3px; font-size
   border-radius: 8px;
 }
 
-.feedback-kind {
-  margin: 0 0 1rem;
-  padding: 0;
-  border: 0;
-}
-
-.feedback-kind legend,
 .feedback-form .field label {
   padding: 0;
   font-size: 0.9rem;
   font-weight: 700;
-}
-
-/* Django renders a RadioSelect as a <ul>. Laid out in a row on a wide screen,
-   and left to wrap to one-per-line on a phone, where each row is also a tap
-   target and wants the width. */
-.feedback-kind ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 1.2rem;
-  margin: 0.5rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.feedback-kind label {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0;
-  font-size: 0.92rem;
-  cursor: pointer;
 }
 
 .feedback-form .field { margin: 0 0 1rem; }
@@ -219,8 +191,6 @@ code { background: #eef0f3; padding: 0.1em 0.35em; border-radius: 3px; font-size
   margin: 0;
   font-size: 0.8rem;
 }
-
-.feedback-kind-tag { font-weight: 700; }
 
 .feedback-done-tag { color: var(--accent); font-weight: 700; }
 

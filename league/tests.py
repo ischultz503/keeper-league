@@ -3551,7 +3551,7 @@ class FeedbackTests(TestCase):
         self.other = get_user_model().objects.create_user('marcus', password='test-pass-1234')
 
     def post(self, **fields):
-        data = {'kind': Feedback.Kind.IDEA, 'message': 'Please add a trade tracker.'}
+        data = {'message': 'Please add a trade tracker.'}
         data.update(fields)
         return self.client.post(reverse('feedback'), data)
 
@@ -3567,7 +3567,6 @@ class FeedbackTests(TestCase):
         note = Feedback.objects.get()
         self.assertEqual(note.user, self.user)
         self.assertEqual(note.message, 'Please add a trade tracker.')
-        self.assertEqual(note.kind, Feedback.Kind.IDEA)
         self.assertFalse(note.resolved)
 
     def test_a_successful_post_redirects_back_to_the_form(self):

@@ -20,17 +20,11 @@
   <input type="hidden" name="page" value="{{ from_page }}">
 
   {% comment %}
-    Rendering the fields by hand rather than {{ form }}, so the radios and the
-    textarea get the page's own markup. {{ form.field.errors }} is where
-    validation failures land -- the view re-renders this same template with the
-    bound form when a POST does not validate.
+    Rendering the field by hand rather than {{ form }}, so the textarea gets the
+    page's own markup. {{ form.message.errors }} is where validation failures
+    land -- the view re-renders this same template with the bound form when a
+    POST does not validate.
   {% endcomment %}
-  <fieldset class="feedback-kind">
-    <legend>{{ form.kind.label }}</legend>
-    {{ form.kind.errors }}
-    {{ form.kind }}
-  </fieldset>
-
   <p class="field">
     <label for="{{ form.message.id_for_label }}">{{ form.message.label }}</label>
     {{ form.message.errors }}
@@ -46,7 +40,6 @@
     {% for note in mine %}
       <li class="feedback-item{% if note.resolved %} done{% endif %}">
         <p class="feedback-meta">
-          <span class="feedback-kind-tag">{{ note.get_kind_display }}</span>
           <span class="subtle">{{ note.created|date:"j M Y" }}</span>
           {% if note.resolved %}<span class="feedback-done-tag">&#10003; handled</span>{% endif %}
         </p>

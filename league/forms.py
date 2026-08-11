@@ -15,13 +15,11 @@ from .models import Feedback
 class FeedbackForm(forms.ModelForm):
     class Meta:
         model = Feedback
-        fields = ['kind', 'message']
+        fields = ['message']
         labels = {
-            'kind': 'What kind of note is this?',
             'message': 'Your note',
         }
         widgets = {
-            'kind': forms.RadioSelect,
             'message': forms.Textarea(
                 attrs={
                     'rows': 6,

@@ -417,11 +417,6 @@ class Feedback(models.Model):
     admin, and so a manager can see that theirs landed.
     """
 
-    class Kind(models.TextChoices):
-        IDEA = 'idea', 'Something to add'
-        CHANGE = 'change', 'Something to change'
-        PROBLEM = 'problem', 'Something is broken'
-
     # SET_NULL rather than CASCADE: if a login is ever removed (the Cognito
     # swap is coming), the suggestion is still worth reading. Attribution goes,
     # the substance stays.
@@ -432,7 +427,9 @@ class Feedback(models.Model):
         blank=True,
         related_name='feedback',
     )
-    kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.IDEA)
+    # Just the note. Deliberately uncategorised: a box of ten managers a year
+    # does not need triage, and a required choice is one more thing between
+    # having a thought and sending it.
     message = models.TextField()
     # Where they were when they hit the tab. Filled in by the view, not typed:
     # "the board is unreadable" is a different bug report depending on the page.

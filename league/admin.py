@@ -227,11 +227,11 @@ class FeedbackAdmin(admin.ModelAdmin):
     and one Save.
     """
 
-    list_display = ['created', 'user', 'kind', 'short_message', 'page', 'resolved']
+    list_display = ['created', 'user', 'short_message', 'page', 'resolved']
     list_editable = ['resolved']
-    list_filter = ['resolved', 'kind']
+    list_filter = ['resolved']
     search_fields = ['message', 'user__username']
-    readonly_fields = ['user', 'kind', 'message', 'page', 'created']
+    readonly_fields = ['user', 'message', 'page', 'created']
 
     @admin.display(description='Note')
     def short_message(self, obj):
