@@ -1065,8 +1065,21 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 
 @media (max-width: 860px) {
   .board-layout { flex-direction: column; }
-  .sandbox { flex: 1 1 auto; width: 100%; position: static; }
   .board-scroll { max-height: none; width: 100%; }
+
+  /* Board first, keeper list under it. Beside the board the list is a sidebar;
+     stacked above it, it is sixteen rows of checkboxes between you and the
+     thing you opened the page to look at.
+     `order` rather than moving it in the template: the DOM keeps the order the
+     desktop layout wants, and one flex property flips the stacked view.
+     Applied at the stacking breakpoint, not the phone one, because a phone held
+     sideways is ~844px wide -- still stacked, and just as annoying there.
+
+     The sandbox's own verdict ("Legal set. Burns Round 3, 5") sits inside the
+     list, so ticking a player still confirms itself without scrolling; the
+     burned CELLS are what you scroll up for. */
+  .board-scroll { order: 1; }
+  .sandbox { flex: 1 1 auto; width: 100%; position: static; order: 2; }
 }
 
 /* Phones ------------------------------------------------------------------ */
