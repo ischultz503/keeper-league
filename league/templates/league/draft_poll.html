@@ -25,10 +25,14 @@
   <div class="poll-intro">{{ poll.intro|linebreaks }}</div>
 {% endif %}
 
+{% comment %}
+  Kept on single lines: a sentence wrapped across two lines in the source is a
+  sentence no assertContains can find, which is how the last version of this
+  paragraph slipped past its own test.
+{% endcomment %}
 <p class="subtle">
-  This grid is public to the league &mdash; every team sees every other team's
-  answers. All times are shown on the league's own clock, and every one of them
-  says which clock that is.
+  These answers are public &mdash; everyone can see each other's responses.
+  <strong>All times shown are in Pacific time.</strong>
 </p>
 
 {% if poll.closed %}

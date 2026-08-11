@@ -3948,7 +3948,14 @@ class DraftPollPageTests(TestCase):
 
     def test_the_page_says_the_answers_are_public(self):
         """Unlike the keeper board's predictions. Managers must know."""
-        self.assertContains(self.get(), 'public to the league')
+        self.assertContains(self.get(), 'These answers are public')
+
+    def test_the_page_names_the_clock_it_is_on(self):
+        """Bold, because it is the one thing on the page a reader can get
+        wrong without noticing."""
+        self.assertContains(
+            self.get(), '<strong>All times shown are in Pacific time.</strong>'
+        )
 
     def test_my_own_row_is_marked_and_clickable(self):
         rows = {row['team'].owner_name: row for row in self.get().context['rows']}
