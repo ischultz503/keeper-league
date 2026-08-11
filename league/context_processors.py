@@ -23,6 +23,7 @@ NAV_KEYS = {
     'team_detail': 'my_team',
     'league_overview': 'standings',
     'eligibility': 'eligibility',
+    'draft_poll': 'draft_poll',
     'feedback': 'feedback',
 }
 

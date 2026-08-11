@@ -205,7 +205,26 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+# These two are constantly confused, so: they do different jobs.
+#
+#   USE_TZ = True   is about STORAGE. Every datetime Django hands the database
+#                   is converted to UTC first, and every one it reads back is a
+#                   timezone-aware object in UTC. That is what you want and it
+#                   is not changing: UTC has no daylight-saving discontinuity,
+#                   so ordering and arithmetic on stored times are always sane.
+#
+#   TIME_ZONE       is about PRESENTATION. It is the wall clock Django renders
+#                   datetimes in, and the clock it assumes when a naive time is
+#                   typed into the admin. It changes nothing in the database.
+#
+# It was 'UTC', which meant a Sunday 7pm draft entered in the admin would be
+# stored as Sunday 7pm UTC and rendered back to every manager as 7pm -- while
+# actually falling at noon Pacific. The poll would have been confidently wrong.
+# Pacific is where the league is, so that is the clock the site speaks.
+#
+# Out of scope, deliberately: per-user timezones. Anyone on Eastern reads the
+# "PT" in the label and does the arithmetic.
+TIME_ZONE = 'America/Los_Angeles'
 
 USE_I18N = True
 

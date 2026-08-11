@@ -8,29 +8,38 @@ that depends on pick inventory or keep history needs real rows, so it uses
 TestCase.
 """
 
+import datetime
 import json
 import tempfile
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db.utils import IntegrityError
 from django.test import SimpleTestCase, TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from . import adp
 from . import draft_sim
 from . import keeper_engine as engine
 from . import names
+from . import poll
 from . import views
 from .context_processors import nav_key
 from .models import (
     DraftPick,
+    DraftPoll,
+    DraftPollAlternative,
+    DraftPollOption,
+    DraftPollVote,
     DraftSlot,
     Feedback,
     KeeperPrediction,
@@ -3459,7 +3468,8 @@ class NavMenuTests(TestCase):
 
     def test_everything_else_moved_inside_the_menu(self):
         panel = self.panel()
-        for label in ['Rules', 'My Team', 'Standings', 'Eligibility', 'Site feedback', 'Log out']:
+        for label in ['Rules', 'My Team', 'Standings', 'Eligibility',
+                      'Draft Poll', 'Site feedback', 'Log out']:
             with self.subTest(label=label):
                 self.assertIn(label, panel)
 
@@ -3711,3 +3721,632 @@ class FeedbackTests(TestCase):
     def test_the_nav_links_to_the_form(self):
         self.client.force_login(self.user)
         self.assertContains(self.client.get(reverse('feedback')), 'Site feedback')
+
+
+# --- The draft-time poll ----------------------------------------------------
+
+
+def poll_time(month, day, hour, minute=0, year=2026):
+    """A candidate draft time, given as PACIFIC wall clock.
+
+    Written this way round on purpose: "Sunday 7pm" is what the commissioner
+    types, and building it in UTC in the tests would quietly re-introduce the
+    exact confusion settings.TIME_ZONE exists to prevent.
+    """
+    naive = datetime.datetime(year, month, day, hour, minute)
+    return timezone.make_aware(naive, ZoneInfo(settings.TIME_ZONE))
+
+
+class PollFormattingTests(SimpleTestCase):
+    """Every rendered time says which clock it is on."""
+
+    def test_a_time_is_labelled_with_its_zone(self):
+        self.assertEqual(
+            poll.format_slot(poll_time(8, 23, 19)), 'Sun Aug 23, 7:00 PM PT'
+        )
+
+    def test_the_hour_is_not_zero_padded(self):
+        self.assertIn('9:30 AM', poll.format_slot(poll_time(8, 23, 9, 30)))
+
+    def test_midnight_and_noon_read_as_people_say_them(self):
+        self.assertIn('12:00 AM', poll.format_slot(poll_time(8, 23, 0)))
+        self.assertIn('12:00 PM', poll.format_slot(poll_time(8, 23, 12)))
+
+    def test_a_utc_datetime_is_shown_on_the_league_clock(self):
+        """USE_TZ stores UTC; TIME_ZONE decides what the reader sees. 2am UTC
+        Monday is Sunday evening here, and the poll must say Sunday."""
+        moment = datetime.datetime(2026, 8, 24, 2, 0, tzinfo=datetime.timezone.utc)
+        self.assertEqual(poll.format_slot(moment), 'Sun Aug 23, 7:00 PM PT')
+
+    def test_the_zone_label_survives_daylight_saving(self):
+        """PDT in August and PST in December are both "PT" to a reader."""
+        self.assertEqual(poll.zone_label(poll_time(8, 23, 19)), 'PT')
+        self.assertEqual(poll.zone_label(poll_time(12, 6, 19)), 'PT')
+
+    def test_every_answer_has_a_mark_of_its_own(self):
+        """Colour alone is not enough, so each answer carries a glyph."""
+        marks = [poll.glyph(value) for value in ['yes', 'maybe', 'no']]
+        self.assertEqual(len(set(marks)), 3)
+        self.assertNotIn('', marks)
+
+    def test_an_unanswered_cell_has_no_mark(self):
+        self.assertEqual(poll.glyph(''), '')
+
+
+class PollTallyTests(SimpleTestCase):
+    """Counting, and which column wins."""
+
+    def test_maybe_is_counted_separately_from_yes(self):
+        counts = poll.tally(['yes', 'yes', 'maybe', 'no'])
+        self.assertEqual((counts['yes'], counts['maybe'], counts['no']), (2, 1, 1))
+
+    def test_available_is_yes_plus_maybe(self):
+        self.assertEqual(poll.tally(['yes', 'maybe', 'no'])['available'], 2)
+
+    def test_an_unanswered_option_counts_nothing(self):
+        counts = poll.tally([])
+        self.assertEqual((counts['yes'], counts['maybe'], counts['no']), (0, 0, 0))
+
+    def test_more_yeses_beats_more_maybes(self):
+        tallies = {
+            1: poll.tally(['yes', 'yes']),
+            2: poll.tally(['yes', 'maybe', 'maybe', 'maybe']),
+        }
+        self.assertEqual(poll.best_option_ids(tallies), (1,))
+
+    def test_maybes_break_a_tie_on_yeses(self):
+        tallies = {
+            1: poll.tally(['yes', 'yes']),
+            2: poll.tally(['yes', 'yes', 'maybe']),
+        }
+        self.assertEqual(poll.best_option_ids(tallies), (2,))
+
+    def test_a_genuine_tie_highlights_both(self):
+        tallies = {1: poll.tally(['yes', 'yes']), 2: poll.tally(['yes', 'yes'])}
+        self.assertEqual(poll.best_option_ids(tallies), (1, 2))
+
+    def test_nothing_is_best_before_anyone_has_voted(self):
+        self.assertEqual(poll.best_option_ids({1: poll.tally([]), 2: poll.tally([])}), ())
+
+    def test_an_all_no_column_is_never_best(self):
+        tallies = {1: poll.tally(['no', 'no']), 2: poll.tally([])}
+        self.assertEqual(poll.best_option_ids(tallies), ())
+
+
+class PollStampTests(SimpleTestCase):
+    """The change stamp: newest timestamp, plus row counts."""
+
+    def moment(self, minute):
+        return datetime.datetime(2026, 8, 1, 12, minute, tzinfo=datetime.timezone.utc)
+
+    def test_the_newest_timestamp_wins(self):
+        stamp = poll.stamp([self.moment(1), self.moment(9), self.moment(4)], [3])
+        self.assertIn('12:09', stamp)
+
+    def test_nothing_at_all_still_gives_a_stamp(self):
+        self.assertEqual(poll.stamp([None, None], [0, 0]), '|0|0')
+
+    def test_a_deletion_moves_the_stamp_even_though_the_timestamp_does_not(self):
+        """The reason the counts are in there. Clearing an answer that was not
+        the newest one leaves max(updated) untouched, and without the count
+        every open browser would keep showing a vote that no longer exists."""
+        before = poll.stamp([self.moment(9)], [4, 0])
+        after = poll.stamp([self.moment(9)], [3, 0])
+        self.assertNotEqual(before, after)
+
+
+class DraftPollModelTests(TestCase):
+    """The four poll models and the constraints that hold them together."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        self.poll = DraftPoll.objects.create(season=self.season)
+        self.option = DraftPollOption.objects.create(
+            poll=self.poll, starts_at=poll_time(8, 23, 19)
+        )
+
+    def test_one_poll_per_season(self):
+        """OneToOneField: two live polls for one season is not a state the
+        database will let us reach."""
+        with self.assertRaises(IntegrityError):
+            DraftPoll.objects.create(season=self.season)
+
+    def test_two_options_cannot_share_a_time(self):
+        with self.assertRaises(IntegrityError):
+            DraftPollOption.objects.create(
+                poll=self.poll, starts_at=self.option.starts_at
+            )
+
+    def test_options_are_ordered_chronologically(self):
+        later = DraftPollOption.objects.create(poll=self.poll, starts_at=poll_time(8, 30, 19))
+        earlier = DraftPollOption.objects.create(poll=self.poll, starts_at=poll_time(8, 20, 19))
+
+        self.assertEqual(
+            list(self.poll.options.all()), [earlier, self.option, later]
+        )
+
+    def test_a_team_answers_each_option_once(self):
+        DraftPollVote.objects.create(
+            option=self.option, team=self.teams['Isaac'], answer='yes'
+        )
+        with self.assertRaises(IntegrityError):
+            DraftPollVote.objects.create(
+                option=self.option, team=self.teams['Isaac'], answer='no'
+            )
+
+    def test_a_team_has_one_alternative_note_per_poll(self):
+        DraftPollAlternative.objects.create(
+            poll=self.poll, team=self.teams['Isaac'], text='Weeknights after 8.'
+        )
+        with self.assertRaises(IntegrityError):
+            DraftPollAlternative.objects.create(
+                poll=self.poll, team=self.teams['Isaac'], text='Actually, Sundays.'
+            )
+
+    def test_an_option_names_itself_with_its_zone(self):
+        self.assertEqual(str(self.option), 'Sun Aug 23, 7:00 PM PT')
+
+    def test_deleting_the_chosen_time_does_not_delete_the_poll(self):
+        """SET_NULL: losing a candidate time must not take the poll with it."""
+        self.poll.chosen_option = self.option
+        self.poll.save(update_fields=['chosen_option'])
+
+        self.option.delete()
+        self.poll.refresh_from_db()
+
+        self.assertIsNone(self.poll.chosen_option)
+
+
+class DraftPollPageTests(TestCase):
+    """The grid itself."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        # keeper_season() finds the season being drafted by its draft order.
+        make_draft(self.season, self.teams, rounds=1)
+
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = self.teams['Isaac']
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+
+        self.poll = DraftPoll.objects.create(season=self.season, intro='Need 8 of 10.')
+        self.sunday = DraftPollOption.objects.create(
+            poll=self.poll, starts_at=poll_time(8, 23, 19), label='after the Cowboys game'
+        )
+        self.saturday = DraftPollOption.objects.create(
+            poll=self.poll, starts_at=poll_time(8, 29, 10)
+        )
+        self.client.force_login(self.user)
+
+    def get(self):
+        return self.client.get(reverse('draft_poll'))
+
+    def test_anonymous_users_are_sent_to_the_login_page(self):
+        self.client.logout()
+        response = self.get()
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_every_team_gets_a_row_and_every_time_a_column(self):
+        response = self.get()
+        self.assertEqual(len(response.context['rows']), 10)
+        self.assertEqual(len(response.context['columns']), 2)
+
+    def test_columns_stay_in_chronological_order(self):
+        """Sorted by nothing else, ever: the grid should read like a calendar."""
+        columns = self.get().context['columns']
+        self.assertEqual(
+            [column['option'].pk for column in columns], [self.sunday.pk, self.saturday.pk]
+        )
+
+    def test_every_time_on_the_page_names_its_zone(self):
+        self.assertContains(self.get(), 'Sun Aug 23, 7:00 PM PT')
+
+    def test_the_page_says_the_answers_are_public(self):
+        """Unlike the keeper board's predictions. Managers must know."""
+        self.assertContains(self.get(), 'public to the league')
+
+    def test_my_own_row_is_marked_and_clickable(self):
+        rows = {row['team'].owner_name: row for row in self.get().context['rows']}
+        self.assertTrue(rows['Isaac']['is_own'])
+        self.assertFalse(rows['Marcus']['is_own'])
+
+    def test_only_my_row_gets_buttons(self):
+        html = self.get().content.decode()
+        own = html.count(f'data-team-id="{self.isaac.pk}"')
+        # Two cells, each with three buttons -- plus the row itself.
+        self.assertEqual(html.count('class="poll-btn'), 6)
+        self.assertGreater(own, 0)
+
+    def test_another_teams_answer_is_visible_as_a_mark(self):
+        DraftPollVote.objects.create(
+            option=self.sunday, team=self.teams['Marcus'], answer='yes'
+        )
+        rows = {row['team'].owner_name: row for row in self.get().context['rows']}
+        self.assertEqual(rows['Marcus']['cells'][0]['answer'], 'yes')
+        self.assertEqual(rows['Marcus']['cells'][0]['glyph'], poll.GLYPHS['yes'])
+
+    def test_the_totals_count_maybe_separately(self):
+        DraftPollVote.objects.create(option=self.sunday, team=self.teams['Marcus'], answer='yes')
+        DraftPollVote.objects.create(option=self.sunday, team=self.teams['Nick'], answer='maybe')
+        DraftPollVote.objects.create(option=self.sunday, team=self.teams['Luke'], answer='no')
+
+        column = self.get().context['columns'][0]
+        self.assertEqual(column['yes'], 1)
+        self.assertEqual(column['available'], 2)
+
+    def test_the_best_column_is_flagged(self):
+        DraftPollVote.objects.create(option=self.saturday, team=self.teams['Marcus'], answer='yes')
+        columns = self.get().context['columns']
+
+        self.assertFalse(columns[0]['best'])
+        self.assertTrue(columns[1]['best'])
+
+    def test_a_closed_poll_renders_read_only_and_names_the_choice(self):
+        self.poll.closed = True
+        self.poll.chosen_option = self.sunday
+        self.poll.save(update_fields=['closed', 'chosen_option'])
+
+        response = self.get()
+        self.assertContains(response, 'This poll is closed')
+        self.assertContains(response, 'Sun Aug 23, 7:00 PM PT')
+        self.assertNotContains(response, 'class="poll-btn')
+
+    def test_a_season_with_no_poll_says_so_rather_than_breaking(self):
+        self.poll.delete()
+        response = self.get()
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context['poll'])
+
+    def test_a_user_with_no_team_still_sees_the_grid(self):
+        """Reading is fine; it is writing that needs a team."""
+        stranger = get_user_model().objects.create_user('commish', password='test-pass-1234')
+        self.client.force_login(stranger)
+
+        response = self.get()
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context['own_team'])
+        self.assertNotContains(response, 'class="poll-btn')
+
+    def test_the_menu_links_to_the_poll(self):
+        self.assertContains(self.get(), reverse('draft_poll'))
+
+
+class DraftPollVoteApiTests(TestCase):
+    """POST /api/draft-poll/vote/ -- the only way an answer is ever written."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        make_draft(self.season, self.teams, rounds=1)
+
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = self.teams['Isaac']
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+
+        self.poll = DraftPoll.objects.create(season=self.season)
+        self.option = DraftPollOption.objects.create(
+            poll=self.poll, starts_at=poll_time(8, 23, 19)
+        )
+        self.client.force_login(self.user)
+
+    def vote(self, answer, option=None):
+        return self.client.post(
+            reverse('draft_poll_vote'),
+            data=json.dumps({'option_id': (option or self.option).pk, 'answer': answer}),
+            content_type='application/json',
+        )
+
+    def test_a_vote_is_stored_against_my_team(self):
+        response = self.vote('yes')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['answer'], 'yes')
+        vote = DraftPollVote.objects.get()
+        self.assertEqual(vote.team, self.isaac)
+        self.assertEqual(vote.answer, 'yes')
+
+    def test_a_second_answer_replaces_the_first(self):
+        self.vote('yes')
+        self.vote('no')
+
+        self.assertEqual(DraftPollVote.objects.count(), 1)
+        self.assertEqual(DraftPollVote.objects.get().answer, 'no')
+
+    def test_reclicking_the_same_answer_clears_it(self):
+        """Otherwise a mis-click is unfixable: there is no "unanswer" button."""
+        self.vote('maybe')
+        response = self.vote('maybe')
+
+        self.assertEqual(response.json()['answer'], '')
+        self.assertFalse(DraftPollVote.objects.exists())
+
+    def test_clearing_and_answering_again_works(self):
+        self.vote('yes')
+        self.vote('yes')
+        self.vote('yes')
+
+        self.assertEqual(DraftPollVote.objects.get().answer, 'yes')
+
+    def test_the_reply_carries_the_updated_tallies(self):
+        DraftPollVote.objects.create(
+            option=self.option, team=self.teams['Marcus'], answer='maybe'
+        )
+        options = self.vote('yes').json()['options']
+
+        self.assertEqual(options[0]['yes'], 1)
+        self.assertEqual(options[0]['available'], 2)
+
+    def test_the_team_is_never_taken_from_the_request(self):
+        """A forged team id changes nothing: the view does not read one."""
+        self.client.post(
+            reverse('draft_poll_vote'),
+            data=json.dumps({
+                'option_id': self.option.pk, 'answer': 'yes',
+                'team_id': self.teams['Marcus'].pk, 'team': self.teams['Marcus'].pk,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(DraftPollVote.objects.get().team, self.isaac)
+
+    def test_a_user_with_no_team_is_refused(self):
+        """403 from the view, not merely a hidden control."""
+        stranger = get_user_model().objects.create_user('commish', password='test-pass-1234')
+        self.client.force_login(stranger)
+
+        self.assertEqual(self.vote('yes').status_code, 403)
+        self.assertFalse(DraftPollVote.objects.exists())
+
+    def test_a_closed_poll_refuses_writes_server_side(self):
+        self.poll.closed = True
+        self.poll.save(update_fields=['closed'])
+
+        self.assertEqual(self.vote('yes').status_code, 403)
+        self.assertFalse(DraftPollVote.objects.exists())
+
+    def test_an_option_from_another_poll_is_refused(self):
+        other_season = Season.objects.create(year=2025)
+        other_poll = DraftPoll.objects.create(season=other_season)
+        stranger_option = DraftPollOption.objects.create(
+            poll=other_poll, starts_at=poll_time(8, 23, 19, year=2025)
+        )
+
+        self.assertEqual(self.vote('yes', option=stranger_option).status_code, 404)
+        self.assertFalse(DraftPollVote.objects.exists())
+
+    def test_an_answer_that_is_not_one_of_the_three_is_refused(self):
+        self.assertEqual(self.vote('probably').status_code, 400)
+        self.assertFalse(DraftPollVote.objects.exists())
+
+    def test_malformed_json_is_rejected_cleanly(self):
+        response = self.client.post(
+            reverse('draft_poll_vote'), data='not json at all',
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_is_not_allowed(self):
+        self.assertEqual(self.client.get(reverse('draft_poll_vote')).status_code, 405)
+
+    def test_anonymous_users_are_rejected(self):
+        self.client.logout()
+        self.assertEqual(self.vote('yes').status_code, 302)
+
+
+class DraftPollStateApiTests(TestCase):
+    """GET /api/draft-poll/state/ -- the cheap "has anything moved?" endpoint."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        make_draft(self.season, self.teams, rounds=1)
+
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = self.teams['Isaac']
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+
+        self.poll = DraftPoll.objects.create(season=self.season)
+        self.option = DraftPollOption.objects.create(
+            poll=self.poll, starts_at=poll_time(8, 23, 19)
+        )
+        self.client.force_login(self.user)
+
+    def state(self, since=None):
+        query = {} if since is None else {'since': since}
+        return self.client.get(reverse('draft_poll_state'), query).json()
+
+    def current_stamp(self):
+        return self.state()['stamp']
+
+    def test_an_unchanged_poll_answers_with_nothing(self):
+        stamp = self.current_stamp()
+        payload = self.state(since=stamp)
+
+        self.assertFalse(payload['changed'])
+        self.assertNotIn('options', payload)
+
+    def test_a_new_vote_changes_the_stamp(self):
+        stamp = self.current_stamp()
+        DraftPollVote.objects.create(
+            option=self.option, team=self.teams['Marcus'], answer='yes'
+        )
+        self.assertNotEqual(self.current_stamp(), stamp)
+
+    def test_a_changed_poll_returns_the_whole_grid(self):
+        DraftPollVote.objects.create(
+            option=self.option, team=self.teams['Marcus'], answer='yes'
+        )
+        payload = self.state(since='something stale')
+
+        self.assertTrue(payload['changed'])
+        self.assertEqual(payload['options'][0]['yes'], 1)
+        self.assertEqual(
+            payload['answers'][str(self.option.pk)][str(self.teams['Marcus'].pk)], 'yes'
+        )
+        self.assertEqual(len(payload['teams']), 10)
+
+    def test_a_cleared_vote_changes_the_stamp_too(self):
+        """The stamp counts rows as well as timestamps, so a deletion shows up
+        even when it does not move max(updated)."""
+        DraftPollVote.objects.create(
+            option=self.option, team=self.teams['Marcus'], answer='yes'
+        )
+        DraftPollVote.objects.create(
+            option=self.option, team=self.teams['Nick'], answer='no'
+        )
+        stamp = self.current_stamp()
+
+        # Delete the OLDER of the two: max(updated) is unchanged by this.
+        DraftPollVote.objects.filter(team=self.teams['Marcus']).delete()
+
+        self.assertNotEqual(self.current_stamp(), stamp)
+
+    def test_an_alternative_note_changes_the_stamp(self):
+        stamp = self.current_stamp()
+        DraftPollAlternative.objects.create(
+            poll=self.poll, team=self.teams['Nick'], text='Weeknights after 8.'
+        )
+        self.assertNotEqual(self.current_stamp(), stamp)
+
+    def test_a_vote_reply_hands_back_a_stamp_that_is_already_current(self):
+        """Otherwise my own click would immediately trigger a full repaint."""
+        response = self.client.post(
+            reverse('draft_poll_vote'),
+            data=json.dumps({'option_id': self.option.pk, 'answer': 'yes'}),
+            content_type='application/json',
+        )
+        self.assertFalse(self.state(since=response.json()['stamp'])['changed'])
+
+    def test_anonymous_users_are_rejected(self):
+        self.client.logout()
+        response = self.client.get(reverse('draft_poll_state'))
+        self.assertEqual(response.status_code, 302)
+
+
+class DraftPollAlternativeTests(TestCase):
+    """The "if none of these work, when does?" note."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        make_draft(self.season, self.teams, rounds=1)
+
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = self.teams['Isaac']
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+
+        self.poll = DraftPoll.objects.create(season=self.season)
+        DraftPollOption.objects.create(poll=self.poll, starts_at=poll_time(8, 23, 19))
+        self.client.force_login(self.user)
+
+    def send(self, text):
+        return self.client.post(reverse('draft_poll'), {'text': text})
+
+    def test_a_note_is_saved_against_my_team(self):
+        self.send('Any weeknight after 8.')
+
+        note = DraftPollAlternative.objects.get()
+        self.assertEqual(note.team, self.isaac)
+        self.assertEqual(note.text, 'Any weeknight after 8.')
+
+    def test_a_good_post_redirects_back(self):
+        """Post/Redirect/Get, so a refresh cannot send it twice."""
+        self.assertRedirects(self.send('Any weeknight after 8.'), reverse('draft_poll'))
+
+    def test_a_second_note_replaces_the_first(self):
+        """Not append-only: a revision should not leave the commissioner two
+        contradictory answers to reconcile."""
+        self.send('Any weeknight after 8.')
+        self.send('Actually, Sundays are better.')
+
+        note = DraftPollAlternative.objects.get()
+        self.assertEqual(note.text, 'Actually, Sundays are better.')
+
+    def test_everyones_notes_are_shown_with_their_owner(self):
+        DraftPollAlternative.objects.create(
+            poll=self.poll, team=self.teams['Marcus'], text='Saturday mornings work.'
+        )
+        response = self.client.get(reverse('draft_poll'))
+
+        self.assertContains(response, 'Saturday mornings work.')
+        self.assertContains(response, 'Marcus')
+
+    def test_a_user_with_no_team_cannot_send_one(self):
+        stranger = get_user_model().objects.create_user('commish', password='test-pass-1234')
+        self.client.force_login(stranger)
+
+        self.assertEqual(self.send('Whenever suits.').status_code, 403)
+        self.assertFalse(DraftPollAlternative.objects.exists())
+
+    def test_a_closed_poll_refuses_notes_server_side(self):
+        self.poll.closed = True
+        self.poll.save(update_fields=['closed'])
+
+        self.assertEqual(self.send('One more idea.').status_code, 403)
+        self.assertFalse(DraftPollAlternative.objects.exists())
+
+    def test_an_empty_note_is_rejected_and_the_form_comes_back(self):
+        response = self.send('  ')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(DraftPollAlternative.objects.exists())
+        self.assertTrue(response.context['form'].errors)
+
+
+class DraftPollAdminTests(TestCase):
+    """What the commissioner sees while running the poll."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        self.poll = DraftPoll.objects.create(season=self.season)
+        self.option = DraftPollOption.objects.create(
+            poll=self.poll, starts_at=poll_time(8, 23, 19)
+        )
+        self.staff = get_user_model().objects.create_superuser(
+            'commish', 'commish@example.com', 'test-pass-1234'
+        )
+        self.client.force_login(self.staff)
+
+    def change_page(self):
+        return self.client.get(
+            reverse('admin:league_draftpoll_change', args=[self.poll.pk])
+        )
+
+    def test_the_times_are_edited_on_the_polls_own_page(self):
+        """A TabularInline, so a list of dates is one screen and one Save."""
+        self.assertContains(self.change_page(), 'options-0-starts_at')
+
+    def test_the_summary_counts_each_answer(self):
+        DraftPollVote.objects.create(option=self.option, team=self.teams['Isaac'], answer='yes')
+        DraftPollVote.objects.create(option=self.option, team=self.teams['Nick'], answer='maybe')
+
+        self.assertContains(self.change_page(), '1 yes / 1 if I have to / 0 no')
+
+    def test_the_summary_names_who_has_not_answered(self):
+        """Chasing the people who have not replied is the job of running a poll."""
+        DraftPollVote.objects.create(option=self.option, team=self.teams['Isaac'], answer='yes')
+        html = self.change_page().content.decode()
+
+        self.assertIn('Not answered at all:', html)
+        self.assertIn('Marcus', html)
+
+    def test_a_fully_answered_poll_says_so(self):
+        for team in self.teams.values():
+            DraftPollVote.objects.create(option=self.option, team=team, answer='yes')
+
+        self.assertContains(self.change_page(), 'nobody -- all in')
+
+    def test_votes_cannot_be_added_by_hand(self):
+        """A poll whose administrator can quietly enter answers is not a poll."""
+        response = self.client.get(reverse('admin:league_draftpollvote_add'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_votes_are_not_editable_from_the_poll_page(self):
+        self.assertNotContains(self.change_page(), 'votes-0-answer')

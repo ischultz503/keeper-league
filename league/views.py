@@ -5,7 +5,8 @@ import markdown
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.http import JsonResponse
+from django.db.models import Count, Max
+from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -15,9 +16,14 @@ from django.views.decorators.http import require_POST
 from . import draft_sim
 from . import keeper_engine as engine
 from . import names
-from .forms import FeedbackForm
+from . import poll as poll_logic
+from .forms import DraftPollAlternativeForm, FeedbackForm
 from .models import (
     DraftPick,
+    DraftPoll,
+    DraftPollAlternative,
+    DraftPollOption,
+    DraftPollVote,
     DraftSlot,
     KeeperPrediction,
     KeeperSelection,
@@ -1015,3 +1021,296 @@ def feedback(request):
             'from_page': request.META.get('HTTP_REFERER', ''),
         },
     )
+
+
+# --- The draft-time poll ----------------------------------------------------
+#
+# A Doodle-style grid: candidate times across the top, the ten teams down the
+# side. EVERY ANSWER IS PUBLIC -- each team sees every other team's answer, and
+# the page says so out loud. That is the deliberate opposite of the keeper
+# board, where predictions are private to one user (see KeeperPrediction), and
+# it is right here for the same reason it is wrong there: scheduling only works
+# if you can see who else can make it.
+#
+# Votes are keyed to Team, never to User. The team comes from the session via
+# _own_team(); no view below ever accepts a team id from the client.
+
+
+def _current_poll():
+    """The poll for the season being drafted, or None.
+
+    OneToOneField(Season) means there can only ever be one, which is why this
+    can return a single object with no "which poll?" to answer.
+    """
+    season = keeper_season()
+    if season is None:
+        return None
+    return (
+        DraftPoll.objects
+        .filter(season=season)
+        .select_related('season', 'chosen_option')
+        .first()
+    )
+
+
+def _poll_stamp(poll):
+    """The poll's change stamp, in two aggregate queries.
+
+    This is what makes polling cheap. Ten browsers asking every fifteen seconds
+    is forty requests a minute; each one costs two aggregates over tables with
+    tens of rows in them, and answers "nothing changed" without serialising the
+    grid at all.
+    """
+    votes = DraftPollVote.objects.filter(option__poll=poll).aggregate(
+        latest=Max('updated'), rows=Count('pk')
+    )
+    alternatives = poll.alternatives.aggregate(latest=Max('updated'), rows=Count('pk'))
+
+    return poll_logic.stamp(
+        [votes['latest'], alternatives['latest']],
+        [votes['rows'], alternatives['rows']],
+    )
+
+
+def _poll_state(poll, teams=None):
+    """Everything the grid draws, as plain JSON-safe values.
+
+    Shared by the vote endpoint's reply and the polling endpoint, and by the
+    page for its column totals, so none of them can disagree about what the
+    grid says.
+    """
+    options = list(poll.options.all())
+    option_ids = [option.pk for option in options]
+    votes = list(DraftPollVote.objects.filter(option__poll=poll))
+
+    tallies = poll_logic.tallies_for(option_ids, votes)
+    best = poll_logic.best_option_ids(tallies)
+    answers = poll_logic.answers_by_option(votes)
+
+    if teams is None:
+        teams = list(Team.objects.all())
+
+    return {
+        'closed': poll.closed,
+        'stamp': _poll_stamp(poll),
+        'options': [
+            {
+                'id': option.pk,
+                'label': poll_logic.format_slot(option.starts_at),
+                'note': option.label,
+                'yes': tallies[option.pk]['yes'],
+                'available': tallies[option.pk]['available'],
+                'no': tallies[option.pk]['no'],
+                'best': option.pk in best,
+            }
+            for option in options
+        ],
+        # {"<option id>": {"<team id>": "yes"}}. JSON object keys are always
+        # strings, so the ids are stringified here rather than surprising the
+        # browser with a number that arrives as "12".
+        'answers': {
+            str(option_id): {str(team_id): answer for team_id, answer in row.items()}
+            for option_id, row in answers.items()
+        },
+        'teams': [{'id': team.pk, 'owner': team.owner_name} for team in teams],
+        'alternatives': [
+            {'team': note.team.owner_name, 'text': note.text}
+            for note in poll.alternatives.select_related('team').all()
+        ],
+    }
+
+
+@login_required
+def draft_poll(request):
+    """The draft-time poll: a public grid of who can make which candidate time.
+
+    Public BY DESIGN. Unlike KeeperPrediction -- private to one user, and read
+    back filtered by request.user -- every answer here is visible to every
+    manager, and the page says so in as many words. A scheduling grid you
+    cannot see the other rows of is just a form.
+
+    The GET renders the whole grid server-side, so the page is complete before
+    any JavaScript runs. The POST is the "when else?" note, which is a plain
+    form and a redirect (Post/Redirect/Get): it is a paragraph someone writes
+    once, not a control they toggle, so the JSON machinery the vote cells use
+    would buy it nothing.
+    """
+    poll = _current_poll()
+    if poll is None:
+        return render(request, 'league/draft_poll.html', {'poll': None})
+
+    own_team = _own_team(request)
+    teams = list(Team.objects.all())
+    mine = (
+        DraftPollAlternative.objects.filter(poll=poll, team=own_team).first()
+        if own_team else None
+    )
+
+    if request.method == 'POST':
+        # Both refusals are enforced HERE, not merely by hiding the form. A
+        # hidden control is a suggestion; this is the part that is load-bearing.
+        if own_team is None:
+            return HttpResponseForbidden('No team is linked to your login.')
+        if poll.closed:
+            return HttpResponseForbidden('This poll is closed.')
+
+        # instance=mine is what makes this replace rather than append: with an
+        # existing row bound, ModelForm.save() issues an UPDATE. Someone
+        # revising "weeknights after 8" should not leave the commissioner a
+        # trail of contradictions to reconcile.
+        form = DraftPollAlternativeForm(request.POST, instance=mine)
+        if form.is_valid():
+            note = form.save(commit=False)
+            note.poll = poll
+            note.team = own_team
+            note.save()
+            messages.success(request, 'Noted -- the commissioner sees these.')
+            return redirect('draft_poll')
+    else:
+        form = DraftPollAlternativeForm(instance=mine)
+
+    state = _poll_state(poll, teams)
+    options = list(poll.options.all())
+    answers = poll_logic.answers_by_option(
+        DraftPollVote.objects.filter(option__poll=poll)
+    )
+
+    # Rows are assembled here rather than in the template because a Django
+    # template cannot look a dict up by a variable key -- {{ answers[o.id] }}
+    # is not something it can say.
+    labels = dict(DraftPollVote.Answer.choices)
+    rows = []
+    for team in teams:
+        cells = []
+        for option in options:
+            answer = answers.get(option.pk, {}).get(team.pk, '')
+            cells.append({
+                'option': option,
+                'answer': answer,
+                'glyph': poll_logic.glyph(answer),
+                # Spelled out for screen readers, since the glyph is decorative.
+                'label': labels.get(answer, 'no answer yet'),
+            })
+        rows.append({
+            'team': team,
+            'is_own': own_team is not None and team.pk == own_team.pk,
+            'cells': cells,
+        })
+
+    columns = [
+        {
+            'option': option,
+            'label': poll_logic.format_slot(option.starts_at),
+            'yes': column['yes'],
+            'available': column['available'],
+            'best': column['best'],
+        }
+        for option, column in zip(options, state['options'])
+    ]
+
+    return render(request, 'league/draft_poll.html', {
+        'poll': poll,
+        'own_team': own_team,
+        'columns': columns,
+        'rows': rows,
+        'form': form,
+        'alternatives': poll.alternatives.select_related('team').all(),
+        'stamp': state['stamp'],
+        'chosen_label': (
+            poll_logic.format_slot(poll.chosen_option.starts_at)
+            if poll.chosen_option else ''
+        ),
+        # The three answers come from the model's own TextChoices, so the
+        # buttons and the database cannot drift apart.
+        'answer_choices': [
+            {'value': value, 'label': label, 'glyph': poll_logic.glyph(value)}
+            for value, label in DraftPollVote.Answer.choices
+        ],
+        # Handed to draft_poll.js through a json_script tag rather than
+        # duplicated in the JavaScript, so there is one definition of what an
+        # answer looks like. Also what the read-only cells are drawn from.
+        'answer_glyphs': poll_logic.GLYPHS,
+        'answer_labels': dict(DraftPollVote.Answer.choices),
+    })
+
+
+@login_required
+@require_POST
+def draft_poll_vote(request):
+    """Record (or clear) the logged-in manager's own team's answer.
+
+    The team is derived from the session and never read from the request body.
+    The option id is checked to belong to THIS season's poll, so a stale or
+    hand-edited id cannot write into another poll's grid.
+
+    Re-sending the answer already stored clears it back to unanswered, which is
+    what makes a mis-click fixable. "Unanswered" is the absence of a row, so
+    clearing means deleting one -- there is no fourth answer value.
+    """
+    team = _own_team(request)
+    if team is None:
+        return JsonResponse({'error': 'No team is linked to your login.'}, status=403)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        option_id = int(payload['option_id'])
+        answer = str(payload['answer'])
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return JsonResponse({'error': 'Malformed request.'}, status=400)
+
+    if answer not in DraftPollVote.Answer.values:
+        return JsonResponse({'error': 'That is not one of the answers.'}, status=400)
+
+    poll = _current_poll()
+    if poll is None:
+        return JsonResponse({'error': 'There is no draft poll yet.'}, status=409)
+    if poll.closed:
+        return JsonResponse({'error': 'This poll is closed.'}, status=403)
+
+    # Scoping the lookup to this poll IS the check: an id from another poll or
+    # another season simply is not found.
+    option = DraftPollOption.objects.filter(pk=option_id, poll=poll).first()
+    if option is None:
+        return JsonResponse({'error': 'That is not a time on this poll.'}, status=404)
+
+    existing = DraftPollVote.objects.filter(option=option, team=team).first()
+    if existing is not None and existing.answer == answer:
+        existing.delete()
+        mine = ''
+    else:
+        # update_or_create is one UPDATE or one INSERT, and it works with the
+        # (option, team) unique constraint rather than racing against it.
+        DraftPollVote.objects.update_or_create(
+            option=option, team=team, defaults={'answer': answer}
+        )
+        mine = answer
+
+    state = _poll_state(poll)
+    return JsonResponse({
+        'option_id': option.pk,
+        'answer': mine,
+        'options': state['options'],
+        'stamp': state['stamp'],
+    })
+
+
+@login_required
+def draft_poll_state(request):
+    """Has anything moved since the stamp the client holds?
+
+    The common answer is no, and answering it costs two aggregates and no
+    serialisation at all. Only when the stamp has actually moved does this
+    build the grid. See _poll_stamp for why the stamp counts rows as well as
+    timestamps.
+    """
+    poll = _current_poll()
+    if poll is None:
+        return JsonResponse({'error': 'There is no draft poll yet.'}, status=409)
+
+    current = _poll_stamp(poll)
+    if request.GET.get('since') == current:
+        return JsonResponse({'changed': False, 'stamp': current})
+
+    state = _poll_state(poll)
+    state['changed'] = True
+    return JsonResponse(state)

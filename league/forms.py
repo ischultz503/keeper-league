@@ -9,7 +9,7 @@ left out of `fields`, which is what keeps them unsettable from a POST body.
 
 from django import forms
 
-from .models import Feedback
+from .models import DraftPollAlternative, Feedback
 
 
 class FeedbackForm(forms.ModelForm):
@@ -41,3 +41,36 @@ class FeedbackForm(forms.ModelForm):
         if len(message) < 5:
             raise forms.ValidationError('Tell us a little more than that.')
         return message
+
+
+class DraftPollAlternativeForm(forms.ModelForm):
+    """One team's "if none of these work, when does?" note.
+
+    `poll` and `team` are not fields: the view sets them from the poll it
+    already loaded and from the session, so a forged POST body cannot file a
+    note under somebody else's name.
+    """
+
+    class Meta:
+        model = DraftPollAlternative
+        fields = ['text']
+        labels = {
+            'text': 'If none of these work, when does?',
+        }
+        widgets = {
+            'text': forms.Textarea(
+                attrs={
+                    'rows': 3,
+                    'placeholder': (
+                        'e.g. any weeknight after 8, or the Saturday before -- '
+                        'anything that helps find a time.'
+                    ),
+                }
+            ),
+        }
+
+    def clean_text(self):
+        text = self.cleaned_data['text'].strip()
+        if len(text) < 5:
+            raise forms.ValidationError('Tell us a little more than that.')
+        return text

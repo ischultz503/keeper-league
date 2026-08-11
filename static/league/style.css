@@ -1459,6 +1459,169 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
   margin-bottom: 0.6rem;
 }
 
+/* Draft-time poll --------------------------------------------------------- */
+
+/* Text for screen readers only. Every answer in the grid is drawn as a glyph
+   and a colour; this is the same fact in words, for anyone who is getting
+   neither. Clipped rather than `display: none`, which would take it out of the
+   accessibility tree along with everything else. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.poll-intro {
+  max-width: 62ch;
+  padding: 0.1rem 0.9rem;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 5px 5px 0;
+}
+
+.poll-closed {
+  padding: 0.6rem 0.9rem;
+  background: #fdf3e3;
+  border: 1px solid #e6c88a;
+  border-radius: 6px;
+}
+
+.poll-error {
+  padding: 0.6rem 0.9rem;
+  color: #7d1f1f;
+  background: #fbeaea;
+  border: 1px solid #e0a3a3;
+  border-radius: 6px;
+}
+
+/* The grid scrolls sideways in its own box rather than widening the page:
+   eight candidate times on a phone is wider than any screen. */
+.poll-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.poll-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.poll-table th,
+.poll-table td {
+  padding: 0.45rem 0.55rem;
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+}
+
+.poll-head {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.25;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.poll-when { display: block; }
+.poll-note { display: block; font-weight: 400; color: var(--muted); font-size: 0.75rem; }
+
+/* The manager column is pinned, so a row still says whose it is once the grid
+   has been scrolled sideways past its first few columns. */
+.poll-corner,
+.poll-owner {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--card);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.poll-you {
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Your own row, marked the same way the board marks your own column. */
+.poll-row.own-row { background: var(--accent-soft); }
+.poll-row.own-row .poll-owner { background: var(--accent-soft); }
+
+/* The answers. Colour AND a glyph, never colour alone -- the glyphs are in the
+   markup (see league.poll.GLYPHS), these only tint them. */
+.poll-mark {
+  display: inline-block;
+  min-width: 1.6rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  font-weight: 700;
+}
+
+.poll-mark.ans-yes   { background: #e2f3e8; color: #1c6b3d; }
+.poll-mark.ans-maybe { background: #fbf0da; color: #8a6209; }
+.poll-mark.ans-no    { background: #fbe6e6; color: #94272b; }
+.poll-mark.ans-none  { color: var(--line); }
+
+/* Your own cells: three buttons, one click each. */
+.poll-choice {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.poll-btn {
+  min-width: 1.7rem;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.poll-btn:hover { border-color: var(--muted); }
+.poll-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.poll-btn.ans-yes.on   { background: #1c6b3d; border-color: #1c6b3d; color: #fff; }
+.poll-btn.ans-maybe.on { background: #b07d10; border-color: #b07d10; color: #fff; }
+.poll-btn.ans-no.on    { background: #94272b; border-color: #94272b; color: #fff; }
+
+/* Totals. The best column(s) are highlighted, and every tie is highlighted --
+   telling the commissioner there is one clear winner when there are three
+   would be a lie in the one direction that matters. */
+.poll-total th,
+.poll-total td {
+  border-top: 2px solid var(--line);
+  border-bottom: 0;
+  font-weight: 700;
+}
+
+.poll-total th { text-align: left; font-weight: 600; }
+.poll-total.soft th,
+.poll-total.soft td { border-top: 0; color: var(--muted); font-weight: 600; }
+
+.poll-count.best { background: var(--accent-soft); color: var(--accent); }
+.poll-head.best { background: var(--accent-soft); }
+
+.poll-live { margin-top: 0.6rem; }
+
+.poll-alt { margin-top: 2rem; }
+.poll-alt h2 { font-size: 1.15rem; }
+
 @media print {
   /* Site furniture is navigation; on paper there is nowhere to navigate to.
      The button would print as an empty pill, which is worse than most. */

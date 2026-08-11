@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Draft Poll{% endblock %}
+{% block main_class %}wide{% endblock %}
+
+{% block content %}
+{% if not poll %}
+  <h1>Draft Poll</h1>
+  <p class="error">
+    No draft poll has been set up yet. The commissioner creates one in the
+    admin, under <strong>Draft polls</strong>, and types the candidate times
+    into the table on that page.
+  </p>
+{% else %}
+
+<h1>{{ poll.season.year }} Draft Poll</h1>
+
+{% if poll.intro %}
+  {% comment %}
+    linebreaks turns the commissioner's newlines into paragraphs and escapes
+    the text on the way. It is escaped even though it comes from the admin --
+    marking trusted-looking text safe is a habit worth not having.
+  {% endcomment %}
+  <div class="poll-intro">{{ poll.intro|linebreaks }}</div>
+{% endif %}
+
+<p class="subtle">
+  This grid is public to the league &mdash; every team sees every other team's
+  answers. All times are shown on the league's own clock, and every one of them
+  says which clock that is.
+</p>
+
+{% if poll.closed %}
+  <p class="poll-closed">
+    <strong>This poll is closed.</strong>
+    {% if chosen_label %}
+      We are drafting <strong>{{ chosen_label }}</strong>{% if poll.chosen_option.label %} ({{ poll.chosen_option.label }}){% endif %}.
+    {% endif %}
+  </p>
+{% endif %}
+
+{% if not columns %}
+  <p class="error">No candidate times have been added to this poll yet.</p>
+{% else %}
+
+{% comment %}
+  Everything the grid's JavaScript needs, on the element it is drawn in: the
+  two endpoints, the stamp the page was rendered at, whether writing is allowed
+  and which row is mine. draft_poll.js reads these and nothing else -- no URLs
+  or ids are written into the script file, so a route can be renamed without
+  touching it.
+{% endcomment %}
+<div id="poll-grid"
+     data-vote-url="{% url 'draft_poll_vote' %}"
+     data-state-url="{% url 'draft_poll_state' %}"
+     data-stamp="{{ stamp }}"
+     data-closed="{% if poll.closed %}1{% endif %}"
+     data-own-team="{% if own_team %}{{ own_team.pk }}{% endif %}">
+
+  {% comment %}
+    The CSRF token for the vote POST, read out of this form by draft_poll.js
+    and sent as an X-CSRFToken header -- the same double-submit pattern
+    board.js uses. There is no form to submit; a vote is a fetch.
+  {% endcomment %}
+  {% csrf_token %}
+
+  {% comment %}
+    json_script is Django's tag for handing data to JavaScript: it writes a
+    <script type="application/json"> block with the value safely encoded, and
+    the browser reads it with JSON.parse(document.getElementById(...).textContent).
+    Safer than interpolating into a <script> body, where a stray quote in the
+    data would end the script.
+  {% endcomment %}
+  {{ answer_glyphs|json_script:"poll-glyphs" }}
+  {{ answer_labels|json_script:"poll-labels" }}
+
+  <p class="poll-error" id="poll-error" hidden></p>
+
+  <div class="poll-scroll">
+    <table class="poll-table">
+      <thead>
+        <tr>
+          <th class="poll-corner" scope="col">Manager</th>
+          {% for column in columns %}
+            {# Chronological, always: the grid should read like a calendar. #}
+            <th scope="col" class="poll-head{% if column.best %} best{% endif %}"
+                data-option-id="{{ column.option.pk }}">
+              <span class="poll-when">{{ column.label }}</span>
+              {% if column.option.label %}<span class="poll-note">{{ column.option.label }}</span>{% endif %}
+            </th>
+          {% endfor %}
+        </tr>
+      </thead>
+
+      <tbody>
+        {% for row in rows %}
+          <tr class="poll-row{% if row.is_own %} own-row{% endif %}" data-team-id="{{ row.team.pk }}">
+            <th scope="row" class="poll-owner">
+              {{ row.team.owner_name }}
+              {% if row.is_own %}<span class="poll-you">you</span>{% endif %}
+            </th>
+
+            {% for cell in row.cells %}
+              <td class="poll-cell" data-option-id="{{ cell.option.pk }}" data-team-id="{{ row.team.pk }}">
+                {% if row.is_own and not poll.closed %}
+                  {% comment %}
+                    Three buttons, not a select: the answer has to be one click
+                    away, and clicking the one already set clears it back to
+                    unanswered so a mis-click is fixable. aria-pressed is what
+                    tells a screen reader which of the three is on.
+                  {% endcomment %}
+                  <div class="poll-choice" role="group"
+                       aria-label="Your answer for {{ cell.option }}">
+                    {% for choice in answer_choices %}
+                      <button type="button"
+                              class="poll-btn ans-{{ choice.value }}{% if cell.answer == choice.value %} on{% endif %}"
+                              data-answer="{{ choice.value }}"
+                              aria-pressed="{% if cell.answer == choice.value %}true{% else %}false{% endif %}"
+                              title="{{ choice.label }}">
+                        <span aria-hidden="true">{{ choice.glyph }}</span>
+                        <span class="sr-only">{{ choice.label }}</span>
+                      </button>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  {% comment %}
+                    Everyone else's answer, and my own once the poll is closed:
+                    a mark, not a control. The glyph carries the meaning; the
+                    colour only reinforces it.
+                  {% endcomment %}
+                  <span class="poll-mark ans-{{ cell.answer|default:'none' }}"
+                        title="{{ row.team.owner_name }}: {{ cell.label }}">
+                    {% if cell.glyph %}
+                      <span aria-hidden="true">{{ cell.glyph }}</span>
+                    {% else %}
+                      <span aria-hidden="true">&middot;</span>
+                    {% endif %}
+                    <span class="sr-only">{{ cell.label }}</span>
+                  </span>
+                {% endif %}
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+
+      {% comment %}
+        Totals under the grid, in the same column order. "Yes" and "yes + if I
+        have to" are counted separately on purpose: a time six people can
+        definitely make is not the same offer as one six people can probably
+        make, and averaging them away would hide exactly the distinction the
+        commissioner is choosing on.
+      {% endcomment %}
+      <tfoot>
+        <tr class="poll-total">
+          <th scope="row">Yes</th>
+          {% for column in columns %}
+            <td class="poll-count{% if column.best %} best{% endif %}"
+                data-option-id="{{ column.option.pk }}" data-count="yes">{{ column.yes }}</td>
+          {% endfor %}
+        </tr>
+        <tr class="poll-total soft">
+          <th scope="row">Yes + if I have to</th>
+          {% for column in columns %}
+            <td class="poll-count{% if column.best %} best{% endif %}"
+                data-option-id="{{ column.option.pk }}" data-count="available">{{ column.available }}</td>
+          {% endfor %}
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  {% if own_team and not poll.closed %}
+    <p class="note poll-live">
+      Your answers save the moment you click. Everyone else's appear within
+      about fifteen seconds while this tab is open.
+    </p>
+  {% elif not own_team %}
+    <p class="note">
+      Your login has no team linked to it, so there is no row here to answer
+      for. Ask the commissioner to link it.
+    </p>
+  {% endif %}
+</div>
+
+{% endif %}
+
+{% comment %}
+  The "when else?" note. A plain form POST and a redirect, not a fetch: this is
+  a paragraph someone writes once, not a control they toggle, so the JSON
+  machinery the cells use would buy it nothing. One note per team, replaced on
+  each save rather than appended.
+{% endcomment %}
+<section class="poll-alt">
+  <h2>If none of these work, when does?</h2>
+
+  {% if own_team and not poll.closed %}
+    <form method="post" class="feedback-form">
+      {% csrf_token %}
+      <p class="field">
+        <label for="{{ form.text.id_for_label }}">{{ form.text.label }}</label>
+        {{ form.text.errors }}
+        {{ form.text }}
+      </p>
+      <button type="submit" class="board-btn">
+        {% if form.instance.pk %}Update my note{% else %}Send it{% endif %}
+      </button>
+    </form>
+  {% endif %}
+
+  {% if alternatives %}
+    <ul class="feedback-list" id="poll-alt-list">
+      {% for note in alternatives %}
+        <li class="feedback-item">
+          <p class="feedback-meta"><strong>{{ note.team.owner_name }}</strong></p>
+          <div class="feedback-body">{{ note.text|linebreaks }}</div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="subtle">Nobody has suggested another time yet.</p>
+  {% endif %}
+</section>
+
+<script src="{% static 'league/draft_poll.js' %}" defer></script>
+{% endif %}
+{% endblock %}

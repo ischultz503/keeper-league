@@ -25,6 +25,7 @@ Isaac is learning Django. He knows Python well (pandas, Streamlit, Jupyter) but 
 - Plain CSS or a single lightweight CSS file; no frontend build tooling.
 - pandas/openpyxl only in data-import management commands, not in request handling.
 - Windows dev machine; virtualenv at `.venv`; dependencies tracked in `requirements.txt`.
+- `TIME_ZONE = 'America/Los_Angeles'`, `USE_TZ = True`. USE_TZ governs storage (always UTC in the database); TIME_ZONE governs presentation (what the admin assumes you typed and what templates render). Every rendered time must name its zone — use `league.poll.format_slot`. No per-user timezones. See `docs/django_orientation.md`.
 - Secrets/config live in a git-ignored `.env` file at repo root, loaded with `python-dotenv`; `settings.py` reads `os.environ`. `FANTASYPROS_API_KEY` is there now; move `SECRET_KEY`/`DEBUG` there when touching settings. Never commit `.env` or print key values.
 - ADP data (Phase 4) comes from the FantasyPros API using that key; CSV import is the fallback.
 

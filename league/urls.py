@@ -25,6 +25,13 @@ urlpatterns = [
     # The suggestion box. Same route for the form and its submission, which is
     # what lets the view redirect back to itself after a successful POST.
     path('feedback/', views.feedback, name='feedback'),
+    # The draft-time poll. One route for the page and its "when else?" note,
+    # which is what lets the view redirect back to itself after a good POST.
+    path('draft-poll/', views.draft_poll, name='draft_poll'),
+    # The two halves of live updating: one writes an answer, the other asks
+    # whether anything has moved. Both under /api/ with the board's endpoints.
+    path('api/draft-poll/vote/', views.draft_poll_vote, name='draft_poll_vote'),
+    path('api/draft-poll/state/', views.draft_poll_state, name='draft_poll_state'),
     # JSON endpoint for the board's keeper sandbox. Namespaced under /api/ to
     # keep it obviously separate from the HTML pages.
     path('api/keeper-preview/', views.keeper_preview, name='keeper_preview'),

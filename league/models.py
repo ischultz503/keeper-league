@@ -6,6 +6,9 @@ from django.db import models
 # All keeper rule logic lives in keeper_engine so it stays unit-testable.
 # The models only store data and delegate.
 from .keeper_engine import base_cost, snake_overall
+# Same reasoning for the poll: how a draft time is spelled (and which clock it
+# names) lives in one testable place, not in a __str__ and a template and a view.
+from .poll import format_slot
 
 
 class Season(models.Model):
@@ -449,3 +452,154 @@ class Feedback(models.Model):
     def __str__(self):
         who = self.user.username if self.user else 'someone'
         return f'{who}: {self.message[:50]}'
+
+
+class DraftPoll(models.Model):
+    """The "when are we drafting?" poll for one season.
+
+    A OneToOneField to Season, so two live polls cannot exist. Ten managers
+    answering two grids and disagreeing about which one counted is the exact
+    failure this rules out at the database level.
+
+    Everything about this poll is PUBLIC by design: every team sees every other
+    team's answer, which is the point of a scheduling grid. That is the
+    deliberate opposite of KeeperPrediction, which is private to one user. See
+    the note on DraftPollVote.
+    """
+
+    season = models.OneToOneField(
+        Season, on_delete=models.CASCADE, related_name='draft_poll'
+    )
+    intro = models.TextField(
+        blank=True,
+        help_text="Your note at the top of the page, e.g. \"Need 8 of 10 to make it work.\"",
+    )
+    closed = models.BooleanField(
+        default=False,
+        help_text='Tick to stop all answering. The grid stays visible, read-only.',
+    )
+    # SET_NULL rather than CASCADE: deleting a candidate time must not delete
+    # the poll it was chosen for. Nullable because for most of the poll's life
+    # nothing has been chosen yet.
+    chosen_option = models.ForeignKey(
+        'DraftPollOption',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='chosen_for',
+        help_text='The time we are actually drafting at. Called out on the page.',
+    )
+
+    def __str__(self):
+        return f'{self.season.year} draft-time poll'
+
+
+class DraftPollOption(models.Model):
+    """One candidate draft time.
+
+    starts_at is stored in UTC like every datetime here (USE_TZ), and rendered
+    in settings.TIME_ZONE with the zone named in the label -- see
+    league.poll.format_slot. Never print one of these without its zone.
+    """
+
+    poll = models.ForeignKey(DraftPoll, on_delete=models.CASCADE, related_name='options')
+    starts_at = models.DateTimeField()
+    label = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text='Optional aside, e.g. "after the Cowboys game".',
+    )
+
+    class Meta:
+        # Chronological, always. The grid reads like a calendar, and sorting the
+        # columns by popularity would make it unreadable.
+        ordering = ['starts_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['poll', 'starts_at'], name='unique_option_per_poll'
+            )
+        ]
+
+    def __str__(self):
+        when = format_slot(self.starts_at)
+        return f'{when} ({self.label})' if self.label else when
+
+
+class DraftPollVote(models.Model):
+    """One team's answer about one candidate time.
+
+    Keyed to TEAM, not to User, and that is deliberate on three counts:
+
+      * everything public on this site derives from views._own_team(request);
+      * the grid's row labels are owner names, so Team is what a row IS;
+      * User is what gets replaced when the login flow moves to Cognito. A
+        team-keyed vote survives that migration untouched; a user-keyed one
+        would be orphaned by it.
+
+    This is the exact opposite of KeeperPrediction, which is keyed to User on
+    purpose because it is private to a person -- two managers on one team page
+    must never see each other's guesses. Do not "fix" either one to match the
+    other: they differ because their audiences differ.
+
+    No row means "hasn't answered". There is deliberately no fourth choice for
+    it -- an absent row and a stored "unanswered" would be two spellings of one
+    state, and something would eventually disagree about which was which.
+    """
+
+    class Answer(models.TextChoices):
+        YES = 'yes', 'Yes'
+        MAYBE = 'maybe', 'If I have to'
+        NO = 'no', 'No'
+
+    option = models.ForeignKey(
+        DraftPollOption, on_delete=models.CASCADE, related_name='votes'
+    )
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='poll_votes')
+    answer = models.CharField(max_length=5, choices=Answer.choices)
+    # auto_now: rewritten on every save, which is what the page's "has anything
+    # changed since?" poll compares against. See league.poll.stamp.
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['option', 'team']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['option', 'team'], name='unique_vote_per_team_option'
+            )
+        ]
+
+    def __str__(self):
+        return f'{self.team.owner_name}: {self.get_answer_display()}'
+
+
+class DraftPollAlternative(models.Model):
+    """One team's "if none of these work, when does?" note.
+
+    One row per team, edited in place -- not append-only. Someone revising
+    "weeknights after 8" should replace their old answer, not leave the
+    commissioner a trail of contradictions to reconcile. The unique constraint
+    is what makes that structural rather than a habit.
+
+    Team-keyed for the same reasons as DraftPollVote, and public for the same
+    reason: it is scheduling, and scheduling is a conversation.
+    """
+
+    poll = models.ForeignKey(
+        DraftPoll, on_delete=models.CASCADE, related_name='alternatives'
+    )
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name='poll_alternatives'
+    )
+    text = models.TextField()
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['team__owner_name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['poll', 'team'], name='unique_alternative_per_team'
+            )
+        ]
+
+    def __str__(self):
+        return f'{self.team.owner_name}: {self.text[:50]}'

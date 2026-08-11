@@ -70,6 +70,50 @@ browser: GET /teams/3/
 
 Forms are the same with POST: the view checks `request.method == "POST"`, validates, saves via the ORM, redirects.
 
+## `USE_TZ` vs `TIME_ZONE` (they are not two settings for one thing)
+
+These get confused constantly. They do different jobs, and the draft poll is the
+first feature where getting it wrong would have been visible to everyone.
+
+**`USE_TZ = True` is about storage.** With it on, Django converts every datetime
+to **UTC** before it reaches the database, and every datetime it reads back is a
+timezone-*aware* object in UTC. This is the setting you leave alone. UTC has no
+daylight-saving jump, so "is A before B?" and "how long between them?" are
+always answerable. Turn it off and you store naive wall-clock times, and one
+Sunday in November two different instants spell the same thing.
+
+**`TIME_ZONE = 'America/Los_Angeles'` is about presentation.** It is the wall
+clock Django renders datetimes on, and the clock it assumes when you type a
+naive time into the admin. It changes nothing about what is in the database.
+
+So the round trip for one candidate draft time is:
+
+```
+admin form:   8/23/2026 7:00 PM     ← you type the Pacific wall clock
+              ↓ Django reads it as TIME_ZONE
+database:     2026-08-24 02:00 UTC  ← USE_TZ decided this
+              ↓ Django renders it back in TIME_ZONE
+page:         Sun Aug 23, 7:00 PM PT
+```
+
+It was `TIME_ZONE = 'UTC'`, which broke the middle step in both directions: 7 PM
+typed in the admin was *stored* as 7 PM UTC — actually noon Pacific — and then
+rendered back as "7 PM" to everyone, so nothing on screen ever revealed the
+error. A poll is exactly the wrong place for that class of bug.
+
+Two rules that follow from this:
+
+- Never print a bare datetime on a page people act on. `league.poll.format_slot`
+  puts the zone in the string ("PT"), derived from the zone rather than typed,
+  so it cannot drift from the setting.
+- In tests, build the datetime in Pacific (`timezone.make_aware(naive,
+  ZoneInfo(settings.TIME_ZONE))`) when you mean a wall clock someone typed.
+  Writing the UTC value by hand in a test re-introduces the same confusion the
+  setting exists to remove.
+
+Out of scope on purpose: per-user timezones. Anyone on Eastern reads the "PT"
+and does the arithmetic.
+
 ## What to watch for while Claude Code scaffolds
 
 1. `startproject` / `startapp` generate boilerplate — most files start nearly empty; don't be alarmed by the file count.
