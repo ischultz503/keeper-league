@@ -11,21 +11,52 @@
     <a class="brand" href="{% url 'board' %}">Keeper League</a>
     <nav>
       {% if user.is_authenticated %}
-        <a href="{% url 'board' %}">Draft Board</a>
-        <a href="{% url 'rules' %}">Rules</a>
-        {# Bare /teams/ is your own; the picker on the page reaches the rest. #}
-        <a href="{% url 'team_switch' %}">My Team</a>
-        {# The year comes from league.context_processors.nav, not a literal. #}
-        <a href="{% url 'league_overview' %}">{% if nav_roster_season %}{{ nav_roster_season.year }} {% endif %}Standings</a>
-        <a href="{% url 'eligibility' %}">Eligibility</a>
-        <a href="{% url 'feedback' %}">Site feedback</a>
-        {% if user.is_staff %}<a href="{% url 'admin:index' %}">Admin</a>{% endif %}
-        <span class="who">{{ user.username }}</span>
-        {# Django 5+ requires POST for logout, so this is a form, not a link. #}
-        <form method="post" action="{% url 'logout' %}">
-          {% csrf_token %}
-          <button type="submit" class="linkish">Log out</button>
-        </form>
+        {% comment %}
+          The Draft Board stays out of the menu on purpose. It is the page
+          people are on nearly all the time, and burying the app's main surface
+          one click deep is a bad trade for a tidier header.
+        {% endcomment %}
+        <a href="{% url 'board' %}"{% if nav_current == 'board' %} aria-current="page"{% endif %}>Draft Board</a>
+
+        {% comment %}
+          Everything else lives behind the hamburger. <details>/<summary> is the
+          same disclosure element the board's prediction popovers use: the
+          browser gives us the open/close toggle, the button role, keyboard
+          activation and the screen-reader "expanded/collapsed" state for free,
+          and it all works before nav.js has loaded (or if it never does).
+
+          aria-current="page" is the accessible "you are here"; the tick beside
+          it is the same fact drawn for everyone else, in CSS (see .nav-panel
+          [aria-current] in style.css).
+        {% endcomment %}
+        <details class="nav-menu" id="nav-menu">
+          {% comment %}
+            The glyph is three CSS-drawn bars, not an image or an icon font --
+            nothing extra to fetch and nothing to go missing. The bars are
+            aria-hidden decoration; aria-label is what the summary announces as.
+          {% endcomment %}
+          <summary class="nav-toggle" aria-label="Menu">
+            <span class="nav-burger" aria-hidden="true"><span></span><span></span><span></span></span>
+          </summary>
+
+          <div class="nav-panel">
+            <a href="{% url 'rules' %}"{% if nav_current == 'rules' %} aria-current="page"{% endif %}>Rules</a>
+            {# Bare /teams/ is your own; the picker on the page reaches the rest. #}
+            <a href="{% url 'team_switch' %}"{% if nav_current == 'my_team' %} aria-current="page"{% endif %}>My Team</a>
+            {# The year comes from league.context_processors.nav, not a literal. #}
+            <a href="{% url 'league_overview' %}"{% if nav_current == 'standings' %} aria-current="page"{% endif %}>{% if nav_roster_season %}{{ nav_roster_season.year }} {% endif %}Standings</a>
+            <a href="{% url 'eligibility' %}"{% if nav_current == 'eligibility' %} aria-current="page"{% endif %}>Eligibility</a>
+            <a href="{% url 'feedback' %}"{% if nav_current == 'feedback' %} aria-current="page"{% endif %}>Site feedback</a>
+            {% if user.is_staff %}<a href="{% url 'admin:index' %}">Admin</a>{% endif %}
+
+            <span class="who">{{ user.username }}</span>
+            {# Django 5+ requires POST for logout, so this is a form, not a link. #}
+            <form method="post" action="{% url 'logout' %}">
+              {% csrf_token %}
+              <button type="submit" class="linkish">Log out</button>
+            </form>
+          </div>
+        </details>
       {% else %}
         <a href="{% url 'login' %}">Log in</a>
       {% endif %}
@@ -55,5 +86,11 @@
   <footer>
     <p>Keeper costs follow the <a href="{% url 'rules' %}">league rules</a>. Declarations are texted to the commissioner &mdash; never entered here.</p>
   </footer>
+  {% comment %}
+    Closing the menu is the one thing <details> will not do for itself: Escape
+    and a click elsewhere on the page. See static/league/nav.js -- everything
+    else about the menu works with this file absent.
+  {% endcomment %}
+  <script src="{% static 'league/nav.js' %}" defer></script>
 </body>
 </html>

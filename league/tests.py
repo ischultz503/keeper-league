@@ -28,6 +28,7 @@ from . import draft_sim
 from . import keeper_engine as engine
 from . import names
 from . import views
+from .context_processors import nav_key
 from .models import (
     DraftPick,
     DraftSlot,
@@ -3425,6 +3426,106 @@ class ViewAccessTests(TestCase):
         self.assertEqual(sorted(nav.index(label) for label in order),
                          [nav.index(label) for label in order])
         self.assertNotIn('My Keepers', nav)
+
+
+class NavMenuTests(TestCase):
+    """The header: a brand, the Draft Board, and everything else behind a menu."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.team = Team.objects.create(
+            name='Zimbo Baggins', owner_name='Isaac', user=self.user
+        )
+        self.client.force_login(self.user)
+
+    def header(self, url_name='rules', *args):
+        html = self.client.get(reverse(url_name, args=args)).content.decode()
+        return html[html.index('<header'):html.index('</header>')]
+
+    def panel(self, url_name='rules', *args):
+        """Just the menu's contents -- what is NOT visible until you open it."""
+        header = self.header(url_name, *args)
+        return header[header.index('<div class="nav-panel">'):]
+
+    def test_the_menu_is_a_details_disclosure(self):
+        """Not a JS dropdown: <details> works before nav.js loads, or without it."""
+        header = self.header()
+        self.assertIn('<details class="nav-menu"', header)
+        self.assertIn('<summary class="nav-toggle" aria-label="Menu">', header)
+
+    def test_the_draft_board_stays_outside_the_menu(self):
+        header = self.header()
+        self.assertLess(header.index('Draft Board'), header.index('<details'))
+
+    def test_everything_else_moved_inside_the_menu(self):
+        panel = self.panel()
+        for label in ['Rules', 'My Team', 'Standings', 'Eligibility', 'Site feedback', 'Log out']:
+            with self.subTest(label=label):
+                self.assertIn(label, panel)
+
+    def test_the_glyph_is_drawn_not_fetched(self):
+        """Three CSS-styled spans. An <img> or an icon font would be one more
+        thing to load and one more thing to go missing."""
+        header = self.header()
+        self.assertIn('<span class="nav-burger" aria-hidden="true">', header)
+        self.assertNotIn('<img', header)
+
+    def test_the_current_page_is_marked_inside_the_menu(self):
+        panel = self.panel('rules')
+        self.assertIn('aria-current="page"', panel)
+        # The attribute has to be on the Rules anchor itself, not merely
+        # somewhere in the panel.
+        rules_link = panel[max(0, panel.index('>Rules<') - 200):panel.index('>Rules<')]
+        self.assertIn('aria-current="page"', rules_link)
+
+    def test_only_one_entry_is_marked_current(self):
+        self.assertEqual(self.header('eligibility').count('aria-current="page"'), 1)
+
+    def test_the_board_marks_itself_current_outside_the_menu(self):
+        Season.objects.create(year=2025)
+        header = self.header('board')
+        self.assertIn('aria-current="page"', header[:header.index('<details')])
+
+    def test_every_team_route_lights_the_same_entry(self):
+        """A permalink to a rival's roster is still the My Team tab."""
+        rival = Team.objects.create(name='Shedeur for ROTY', owner_name='Marcus')
+        for url_name, args in [('team_switch', []), ('team_detail', [rival.pk])]:
+            with self.subTest(route=url_name):
+                self.assertEqual(self.client.get(reverse(url_name, args=args))
+                                 .context['nav_current'], 'my_team')
+
+    def test_a_page_with_no_menu_entry_marks_nothing(self):
+        self.assertEqual(nav_key('login'), '')
+        self.assertEqual(nav_key(None), '')
+
+    def test_the_logout_control_is_still_a_posting_form(self):
+        """Django 5+ refuses a GET logout, so this can never become a link --
+        and moving it inside the menu must not lose its CSRF token."""
+        panel = self.panel()
+        self.assertIn(f'<form method="post" action="{reverse("logout")}">', panel)
+        self.assertIn('name="csrfmiddlewaretoken"', panel)
+        self.assertIn('class="linkish"', panel)
+
+    def test_logging_out_from_the_menu_still_works(self):
+        response = self.client.post(reverse('logout'))
+        self.assertEqual(response.status_code, 302)
+        self.assertNotIn('_auth_user_id', self.client.session)
+
+    def test_the_admin_link_is_staff_only(self):
+        self.assertNotIn('Admin', self.panel())
+
+        self.user.is_staff = True
+        self.user.save(update_fields=['is_staff'])
+        self.assertIn(reverse('admin:index'), self.panel())
+
+    def test_the_menu_script_is_loaded(self):
+        self.assertContains(self.client.get(reverse('rules')), 'league/nav.js')
+
+    def test_a_logged_out_visitor_gets_no_menu(self):
+        self.client.logout()
+        html = self.client.get(reverse('login')).content.decode()
+        self.assertNotIn('nav-menu', html)
+        self.assertIn('Log in', html)
 
 
 class EligibilityPageTests(TestCase):

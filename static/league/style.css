@@ -85,6 +85,105 @@ main {
   text-decoration: underline;
 }
 
+/* The hamburger menu ------------------------------------------------------
+   Eight links plus a username and a logout form had outgrown one row, so all
+   of it except the Draft Board now hangs off a <details>. Same disclosure
+   element as the board's cell popovers, for the same reason: the browser owns
+   the open/close state, so this works with no JavaScript at all. */
+
+.nav-menu {
+  /* The panel is positioned against this, not against the header, so it lands
+     under the button however the header has wrapped. */
+  position: relative;
+}
+
+.nav-menu > summary {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 0.3rem 0.35rem;
+  border-radius: 5px;
+  /* Both lines kill the default disclosure triangle: `list-style` covers
+     Firefox and modern Chrome, the ::-webkit- pseudo-element older Safari. */
+  list-style: none;
+}
+
+.nav-menu > summary::-webkit-details-marker { display: none; }
+.nav-menu[open] > summary,
+.nav-menu > summary:hover { background: rgba(255, 255, 255, 0.15); }
+
+/* Focus ring drawn by hand: the summary is the menu's keyboard entry point, so
+   it has to be obviously focused, and the header's green ground swallows the
+   browser default. */
+.nav-menu > summary:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+
+/* The glyph. Three spans, drawn in CSS -- no image file, no icon font. */
+.nav-burger {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 1.15rem;
+  height: 0.85rem;
+}
+
+.nav-burger span {
+  display: block;
+  height: 2px;
+  background: #fff;
+  border-radius: 1px;
+}
+
+.nav-panel {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  /* Right-aligned so it opens inward from the corner rather than off-screen. */
+  right: 0;
+  /* Must clearly beat the board: an open prediction popover lifts its cell to
+     z-index 20 (see .cell:has(.cell-pop[open])), and this panel overlaps the
+     board's top-right corner exactly where those cells are. */
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  min-width: 12rem;
+  padding: 0.35rem;
+  background: var(--accent);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.nav-panel a,
+.nav-panel .who,
+.nav-panel .linkish {
+  padding: 0.45rem 0.6rem;
+  border-radius: 4px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.nav-panel a:hover { background: rgba(255, 255, 255, 0.12); text-decoration: none; }
+
+/* "You are here", drawn from the same attribute that announces it to a screen
+   reader -- one source of truth, so the tick cannot drift from the semantics.
+   The links no longer sit in the header where you could see which was
+   highlighted, so the menu has to answer it from the inside. */
+.nav-panel [aria-current="page"] { background: rgba(255, 255, 255, 0.18); font-weight: 600; }
+.nav-panel [aria-current="page"]::after { content: " ¹3"; }
+
+/* The logout form is still a form -- Django 5+ refuses a GET logout, so this
+   cannot become a link. It only has to sit in the column looking like one. */
+.nav-panel form { width: 100%; }
+.nav-panel .linkish { display: block; width: 100%; text-decoration: none; }
+.nav-panel .linkish:hover { background: rgba(255, 255, 255, 0.12); text-decoration: underline; }
+
+/* Divider above the account block, so "who am I / log out" reads as its own
+   group rather than as two more destinations. */
+.nav-panel .who {
+  margin-top: 0.25rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+}
+
 /* Typography -------------------------------------------------------------- */
 
 h1 { margin: 0 0 0.25rem; font-size: 1.6rem; }
