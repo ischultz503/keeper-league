@@ -8,6 +8,19 @@
 {% block title %}Keeper League Rules{% endblock %}
 
 {% block content %}
+{% comment %}
+  Above the rules and above the print button, because someone reading the rules
+  is the single most likely person to care that they might be about to change.
+  Hidden in print (see the @media print block): a saved rulebook should not
+  carry a link to a vote that closed months ago.
+{% endcomment %}
+{% if open_vote %}
+  <p class="rules-vote-callout">
+    A vote is open on {{ proposal_count }} change{{ proposal_count|pluralize }} to these rules.
+    <a href="{% url 'rules_vote' %}">Read the ballot and vote</a>.
+  </p>
+{% endif %}
+
 {% if rules_html %}
   {% comment %}
     Hidden until rules.js reveals it. The button can only work through

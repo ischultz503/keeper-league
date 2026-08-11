@@ -9,7 +9,7 @@ left out of `fields`, which is what keeps them unsettable from a POST body.
 
 from django import forms
 
-from .models import DraftPollAlternative, Feedback
+from .models import DraftPollAlternative, Feedback, RulesSuggestion
 
 
 class FeedbackForm(forms.ModelForm):
@@ -89,4 +89,46 @@ class DraftPollAlternativeForm(forms.ModelForm):
         The feedback box asks for five characters because a one-word bug report
         helps nobody. Here "Sat" is a complete and useful answer.
         """
+        return self.cleaned_data['text'].strip()
+
+
+class RulesSuggestionForm(forms.ModelForm):
+    """One team's "anything else?" note at the foot of the rules ballot.
+
+    Shaped exactly like DraftPollAlternativeForm, including the two things that
+    are easy to miss: `poll` and `team` are not fields (the view sets them from
+    the session, so a forged POST cannot file a note under someone else's name),
+    and an empty box is a RETRACTION rather than an error. See views.rules_vote
+    for the deleting.
+
+    One box for the whole ballot, not one per proposal -- hence the placeholder
+    asking which change they mean.
+    """
+
+    class Meta:
+        model = RulesSuggestion
+        fields = ['text']
+        labels = {
+            'text': 'Anything else on these changes?',
+        }
+        widgets = {
+            'text': forms.Textarea(
+                attrs={
+                    'rows': 4,
+                    'placeholder': (
+                        'Say which change you mean. A different version you would '
+                        'rather vote on, a case nobody has thought of, or a '
+                        'wording that needs pinning down.'
+                    ),
+                }
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # NOT NULL on the model, optional on the form: a stored note always has
+        # words in it, and an empty box still means something (see above).
+        self.fields['text'].required = False
+
+    def clean_text(self):
         return self.cleaned_data['text'].strip()

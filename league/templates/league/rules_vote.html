@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+
+{% block title %}Rules Vote{% endblock %}
+
+{% block content %}
+{% if not poll %}
+  <h1>Rules Vote</h1>
+  <p class="error">
+    No vote is open. The commissioner starts one in the admin, under
+    <strong>Rules polls</strong>, and writes the proposals on that page.
+  </p>
+{% else %}
+
+<h1>{{ poll.season.year }} Rules Vote</h1>
+
+{% if poll.intro %}
+  {% comment %}
+    linebreaks turns the commissioner's newlines into paragraphs and escapes the
+    text on the way. Escaped even though it came from the admin -- marking
+    trusted-looking text safe is a habit worth not having.
+  {% endcomment %}
+  <div class="poll-intro">{{ poll.intro|linebreaks }}</div>
+{% endif %}
+
+{% comment %}
+  Each of these sentences stays on ONE source line: a sentence wrapped across
+  two lines is a sentence no assertContains can find, which is how an earlier
+  version of the draft poll's notice slipped past its own test.
+{% endcomment %}
+{% if poll.closed %}
+  <p class="poll-closed">
+    <strong>This vote is closed.</strong>
+    Every ballot below is now public, as promised while it was open.
+  </p>
+{% else %}
+  <p class="ballot-secrecy">
+    <strong>Your answers are hidden from everyone, including the commissioner, until this vote closes.</strong>
+    When it closes, every vote and every note becomes visible to the whole league &mdash; so vote as if it will be read, because it will be.
+  </p>
+{% endif %}
+
+{% if poll.effective_note %}
+  <p class="note">{{ poll.effective_note }}</p>
+{% endif %}
+
+{% if not rows %}
+  <p class="error">No proposals have been written for this vote yet.</p>
+{% else %}
+
+{% comment %}
+  One form around all three proposals and the note, with a single submit. No
+  fetch, no timer, no JavaScript file: there is nothing to watch until the vote
+  closes, and answering all three then committing them together is what you
+  actually want on a ballot.
+
+  When you cannot vote -- no team linked, or the vote is closed -- the <form>
+  and its button are simply not drawn, and views.rules_vote refuses the POST
+  anyway. The proposals themselves render either way.
+{% endcomment %}
+{% if can_vote %}<form method="post" class="ballot">{% csrf_token %}{% endif %}
+
+{% for row in rows %}
+  <section class="proposal" id="proposal-{{ row.proposal.order }}">
+    <h2>{{ row.proposal.order }}. {{ row.proposal.title }}</h2>
+    {% if row.proposal.rule_reference %}
+      <p class="proposal-ref">{{ row.proposal.rule_reference }}</p>
+    {% endif %}
+
+    {% comment %}
+      Side by side on a wide screen, stacked on a narrow one. The two texts are
+      the same kind of thing and get the same treatment; only the labels differ.
+    {% endcomment %}
+    <div class="proposal-texts">
+      <div class="proposal-text">
+        <h3>Current</h3>
+        <div>{{ row.proposal.current_text|linebreaks }}</div>
+      </div>
+      <div class="proposal-text proposed">
+        <h3>Proposed</h3>
+        <div>{{ row.proposal.proposed_text|linebreaks }}</div>
+      </div>
+    </div>
+
+    {% comment %}
+      The two cases, in the same type at the same width. The commissioner wrote
+      both and votes on the result; letting "for" have the larger heading would
+      be a thumb on the scale nobody agreed to.
+    {% endcomment %}
+    <div class="proposal-cases">
+      <div class="proposal-case">
+        <h3>The case for</h3>
+        <div>{{ row.proposal.case_for|linebreaks }}</div>
+      </div>
+      <div class="proposal-case">
+        <h3>The case against</h3>
+        <div>{{ row.proposal.case_against|linebreaks }}</div>
+      </div>
+    </div>
+
+    {% if row.proposal.note %}
+      {# Neutral context: an interaction with another proposal, or a definition. #}
+      <div class="proposal-note">{{ row.proposal.note|linebreaks }}</div>
+    {% endif %}
+
+    {% if can_vote %}
+      {% comment %}
+        A fieldset with a legend is the accessible way to group radios: a screen
+        reader announces the legend before each option, so "For" is heard as
+        "Your vote, For" rather than as a bare word three times a page.
+
+        Nothing is checked until you have voted. There is no "no opinion" radio
+        because Abstain IS that answer, said on purpose and stored as a row --
+        see RulesVote. Leaving the group blank leaves whatever you had before.
+      {% endcomment %}
+      <fieldset class="ballot-choice">
+        <legend>Your vote</legend>
+        {% for choice in choices %}
+          <label class="ballot-option{% if row.mine == choice.value %} on{% endif %}">
+            <input type="radio"
+                   name="proposal-{{ row.proposal.pk }}"
+                   value="{{ choice.value }}"
+                   {% if row.mine == choice.value %}checked{% endif %}>
+            <span>{{ choice.label }}</span>
+          </label>
+        {% endfor %}
+      </fieldset>
+    {% endif %}
+
+    {% if poll.closed %}
+      {% comment %}
+        Everything, all at once, the moment the vote closes: the split, who voted
+        which way, and the outcome if the commissioner has recorded one. The app
+        does not work out who won -- section 8 says "majority vote" and does not
+        say majority of what, so that call is a person's, not a program's.
+      {% endcomment %}
+      <div class="ballot-results">
+        <h3>Result</h3>
+        <ul class="ballot-tally">
+          {% for result in row.results %}
+            <li>
+              <strong>{{ result.label }}: {{ result.count }}</strong>
+              {% if result.teams %}<span class="subtle">{{ result.teams|join:", " }}</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+        <p class="ballot-turnout">{{ row.turnout }}</p>
+        <p class="ballot-outcome">
+          Recorded outcome:
+          {% if row.proposal.outcome %}
+            <strong>{{ row.proposal.get_outcome_display }}</strong>
+          {% else %}
+            <span class="subtle">not recorded yet</span>
+          {% endif %}
+        </p>
+      </div>
+    {% else %}
+      {% comment %}
+        The only thing this page says about anybody else while the vote is open,
+        and it says nothing about how they voted. It is here so a manager can
+        tell "nobody has got to this yet" from "I am the last one".
+      {% endcomment %}
+      <p class="ballot-turnout">{{ row.turnout }} on this one. How, you find out when it closes.</p>
+    {% endif %}
+  </section>
+{% endfor %}
+
+{% if poll.closing_note %}
+  <section class="ballot-closing">{{ poll.closing_note|linebreaks }}</section>
+{% endif %}
+
+<section class="ballot-note">
+  <h2>Anything else?</h2>
+
+  {% if can_vote %}
+    <p class="field">
+      <label for="{{ form.text.id_for_label }}">{{ form.text.label }}</label>
+      {{ form.text.errors }}
+      {{ form.text }}
+    </p>
+  {% endif %}
+
+  {% if suggestions %}
+    <ul class="feedback-list">
+      {% for note in suggestions %}
+        <li class="feedback-item">
+          <p class="feedback-meta">
+            <strong>{% if poll.closed %}{{ note.team.owner_name }}{% else %}Your note{% endif %}</strong>
+          </p>
+          <div class="feedback-body">{{ note.text|linebreaks }}</div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% elif poll.closed %}
+    <p class="subtle">Nobody added a note.</p>
+  {% endif %}
+</section>
+
+{% if can_vote %}
+  {% comment %}
+    One button for the lot. It says what it sends, because "Save" on a page with
+    three radio groups and a textarea does not tell you how much of it goes.
+  {% endcomment %}
+  <p class="ballot-submit">
+    <button type="submit" class="board-btn">Save my ballot</button>
+    <span class="subtle">Saves every answer and the note together. Come back and change them any time until the vote closes.</span>
+  </p>
+  </form>
+{% endif %}
+
+{% if not own_team %}
+  <p class="note">
+    Your login has no team linked to it, so there is no ballot here for you to
+    fill in. Ask the commissioner to link it.
+  </p>
+{% endif %}
+
+{% endif %}
+{% endif %}
+{% endblock %}

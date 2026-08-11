@@ -18,6 +18,7 @@ from .models import Season
 NAV_KEYS = {
     'board': 'board',
     'rules': 'rules',
+    'rules_vote': 'rules_vote',
     'my_team': 'my_team',
     'team_switch': 'my_team',
     'team_detail': 'my_team',

@@ -22,6 +22,11 @@ urlpatterns = [
     path('my-team/', views.my_team, name='my_team'),
     path('eligibility/', views.eligibility, name='eligibility'),
     path('rules/', views.rules, name='rules'),
+    # The section 8 ballot. One route for the page and its POST, so the view can
+    # redirect back to itself after a good save. No /api/ companion: unlike the
+    # draft poll there is nothing to watch live, because every other team's
+    # answer is hidden until the vote closes.
+    path('rules-vote/', views.rules_vote, name='rules_vote'),
     # The suggestion box. Same route for the form and its submission, which is
     # what lets the view redirect back to itself after a successful POST.
     path('feedback/', views.feedback, name='feedback'),

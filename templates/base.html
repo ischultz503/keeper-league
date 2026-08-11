@@ -41,6 +41,8 @@
 
           <div class="nav-panel">
             <a href="{% url 'rules' %}"{% if nav_current == 'rules' %} aria-current="page"{% endif %}>Rules</a>
+            {# Directly under Rules: it is a vote about the page above it. #}
+            <a href="{% url 'rules_vote' %}"{% if nav_current == 'rules_vote' %} aria-current="page"{% endif %}>Rules Vote</a>
             {# Bare /teams/ is your own; the picker on the page reaches the rest. #}
             <a href="{% url 'team_switch' %}"{% if nav_current == 'my_team' %} aria-current="page"{% endif %}>My Team</a>
             {# The year comes from league.context_processors.nav, not a literal. #}

@@ -3514,6 +3514,21 @@ class NavMenuTests(TestCase):
         self.assertEqual(nav_key('login'), '')
         self.assertEqual(nav_key(None), '')
 
+    def test_the_rules_vote_has_its_own_entry_under_rules(self):
+        """A vote about the page above it, so it sits directly below it. The
+        NAV_KEYS entry is easy to forget: miss it and the link works but never
+        lights up, with nothing in the view to suggest why."""
+        panel = self.panel()
+        self.assertEqual(nav_key('rules_vote'), 'rules_vote')
+        self.assertLess(panel.index('>Rules<'), panel.index('>Rules Vote<'))
+        self.assertLess(panel.index('>Rules Vote<'), panel.index('>My Team<'))
+
+    def test_the_ballot_page_lights_its_own_entry(self):
+        Season.objects.create(year=2026)
+        self.assertEqual(
+            self.client.get(reverse('rules_vote')).context['nav_current'], 'rules_vote'
+        )
+
     def test_the_logout_control_is_still_a_posting_form(self):
         """Django 5+ refuses a GET logout, so this can never become a link --
         and moving it inside the menu must not lose its CSRF token."""
@@ -4630,3 +4645,452 @@ class RulesPollAdminTests(TestCase):
 
     def test_votes_are_not_editable_from_the_ballot_page(self):
         self.assertNotContains(self.change_page(), 'votes-0-choice')
+
+
+class RulesBallotPageTests(TestCase):
+    """The ballot page: what it shows, and what it refuses to."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        # keeper_season() finds the season being drafted by its draft order.
+        make_draft(self.season, self.teams, rounds=1)
+
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = self.teams['Isaac']
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+
+        self.poll, self.proposals = make_ballot(
+            self.season,
+            intro='Three changes to Section 4.',
+            effective_note='If passed, these take effect for the 2026 draft.',
+            closing_note='With all three passed, the only shape forbidden is two cheap players.',
+        )
+        self.client.force_login(self.user)
+
+    def get(self):
+        return self.client.get(reverse('rules_vote'))
+
+    def close(self):
+        self.poll.closed = True
+        self.poll.save(update_fields=['closed'])
+
+    def test_anonymous_users_are_sent_to_the_login_page(self):
+        self.client.logout()
+        response = self.get()
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_every_proposal_is_on_the_page_in_ballot_order(self):
+        rows = self.get().context['rows']
+        self.assertEqual([row['proposal'].order for row in rows], [1, 2, 3])
+
+    def test_both_wordings_and_both_cases_are_shown(self):
+        response = self.get()
+        for text in ['The rule as it stands, 1.', 'What it would say instead, 1.',
+                     'Why you might want this, 1.', 'Why you might not, 1.']:
+            with self.subTest(text=text):
+                self.assertContains(response, text)
+
+    def test_the_two_cases_are_labelled_and_given_the_same_heading(self):
+        """Neither side gets the larger type; the markup is the same shape."""
+        html = self.get().content.decode()
+        self.assertIn('<h3>The case for</h3>', html)
+        self.assertIn('<h3>The case against</h3>', html)
+
+    def test_the_rule_reference_is_shown(self):
+        self.assertContains(self.get(), 'Section 4, bullet 1')
+
+    def test_the_intro_and_the_effective_note_are_shown(self):
+        response = self.get()
+        self.assertContains(response, 'Three changes to Section 4.')
+        self.assertContains(response, 'If passed, these take effect for the 2026 draft.')
+
+    def test_the_closing_note_is_the_last_thing_before_the_box(self):
+        html = self.get().content.decode()
+        self.assertIn('the only shape forbidden is two cheap players', html)
+        self.assertLess(
+            html.index('two cheap players'), html.index('Anything else?')
+        )
+
+    def test_the_page_says_the_ballot_is_secret_now_and_public_later(self):
+        """People must know both halves BEFORE they vote, not after."""
+        response = self.get()
+        self.assertContains(
+            response,
+            '<strong>Your answers are hidden from everyone, including the '
+            'commissioner, until this vote closes.</strong>',
+            html=True,
+        )
+        self.assertContains(response, 'becomes visible to the whole league')
+
+    def test_there_is_no_javascript_on_this_page(self):
+        """Nothing to watch until it closes, so nothing to poll for."""
+        html = self.get().content.decode()
+        self.assertNotIn('rules_vote.js', html)
+        self.assertNotIn('fetch(', html)
+
+    def test_one_button_submits_the_whole_ballot(self):
+        html = self.get().content.decode()
+        self.assertEqual(html.count('type="submit"'), 2)  # the ballot, and log out
+        self.assertIn('Save my ballot', html)
+
+    def test_my_stored_vote_comes_back_pre_checked(self):
+        RulesVote.objects.create(
+            proposal=self.proposals[1], team=self.isaac, choice='against'
+        )
+        response = self.get()
+        rows = response.context['rows']
+
+        self.assertEqual(rows[1]['mine'], 'against')
+        self.assertEqual(rows[0]['mine'], '')
+        # Exactly one radio on the page comes back checked, and it is the
+        # "against" one belonging to proposal 2.
+        html = response.content.decode()
+        self.assertEqual(html.count('checked'), 1)
+        before = html[:html.index('checked')]
+        self.assertTrue(before.rstrip().endswith('value="against"'))
+        self.assertIn(f'name="proposal-{self.proposals[1].pk}"', before[-120:])
+
+    def test_nothing_is_checked_before_i_have_voted(self):
+        self.assertNotContains(self.get(), 'checked')
+
+    def test_the_turnout_count_is_all_it_says_about_anyone_else(self):
+        for owner in ['Marcus', 'Nick', 'Luke']:
+            RulesVote.objects.create(
+                proposal=self.proposals[0], team=self.teams[owner], choice='for'
+            )
+
+        response = self.get()
+        self.assertEqual(response.context['rows'][0]['turnout'],
+                         '3 of 10 managers have voted')
+        self.assertContains(response, '3 of 10 managers have voted')
+
+    def test_an_abstention_shows_up_in_turnout(self):
+        """Which is the point of storing one: it is not the same as silence."""
+        RulesVote.objects.create(
+            proposal=self.proposals[0], team=self.teams['Marcus'], choice='abstain'
+        )
+        self.assertEqual(
+            self.get().context['rows'][0]['turnout'], '1 of 10 managers has voted'
+        )
+
+    def test_a_season_with_no_ballot_says_so_rather_than_breaking(self):
+        self.poll.delete()
+        response = self.get()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context['poll'])
+        self.assertContains(response, 'No vote is open')
+
+    def test_a_user_with_no_team_can_read_but_gets_no_radios(self):
+        stranger = get_user_model().objects.create_user('commish', password='test-pass-1234')
+        self.client.force_login(stranger)
+
+        response = self.get()
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['can_vote'])
+        self.assertNotContains(response, 'type="radio"')
+        self.assertContains(response, 'no team linked to it')
+
+    def test_a_user_with_no_team_is_refused_a_post(self):
+        """403 from the view, not merely an undrawn button."""
+        stranger = get_user_model().objects.create_user('commish', password='test-pass-1234')
+        self.client.force_login(stranger)
+
+        response = self.client.post(
+            reverse('rules_vote'), {f'proposal-{self.proposals[0].pk}': 'for'}
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(RulesVote.objects.exists())
+
+    def test_a_closed_ballot_refuses_writes_server_side(self):
+        self.close()
+        response = self.client.post(
+            reverse('rules_vote'), {f'proposal-{self.proposals[0].pk}': 'for'}
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(RulesVote.objects.exists())
+
+    def test_a_closed_ballot_draws_no_radios(self):
+        self.close()
+        self.assertNotContains(self.get(), 'type="radio"')
+
+    def test_the_menu_links_to_the_ballot(self):
+        self.assertContains(self.get(), reverse('rules_vote'))
+
+
+class RulesBallotSecrecyTests(TestCase):
+    """The test that matters: nobody else's vote is in the page while it is open.
+
+    Not a CSS problem and not a template problem -- another team's choice must
+    not be in `response.content` at all, so there is nothing to find in View
+    Source, nothing in a JSON payload, and nothing an accidental {% if %} can
+    let slip.
+    """
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        make_draft(self.season, self.teams, rounds=1)
+        self.poll, self.proposals = make_ballot(self.season, count=1)
+
+        self.a_user = get_user_model().objects.create_user('marcus', password='test-pass-1234')
+        self.a_team = self.teams['Marcus']
+        self.a_team.user = self.a_user
+        self.a_team.save(update_fields=['user'])
+
+        self.b_user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.b_team = self.teams['Isaac']
+        self.b_team.user = self.b_user
+        self.b_team.save(update_fields=['user'])
+
+    def a_votes(self, choice='for'):
+        RulesVote.objects.create(
+            proposal=self.proposals[0], team=self.a_team, choice=choice
+        )
+
+    def as_b(self):
+        self.client.force_login(self.b_user)
+        return self.client.get(reverse('rules_vote'))
+
+    def close(self):
+        self.poll.closed = True
+        self.poll.save(update_fields=['closed'])
+
+    def test_while_open_b_cannot_see_that_a_voted_for(self):
+        self.a_votes('for')
+        response = self.as_b()
+
+        self.assertNotContains(response, 'Marcus')
+        self.assertNotContains(response, 'For: 1')
+        self.assertEqual(response.context['rows'][0]['results'], [])
+
+    def test_closing_the_ballot_shows_b_exactly_that(self):
+        self.a_votes('for')
+        self.close()
+        response = self.as_b()
+
+        self.assertContains(response, 'Marcus')
+        self.assertContains(response, 'For: 1')
+
+    def test_the_choices_never_reach_the_context_while_open(self):
+        """Belt and braces: not merely absent from the HTML, absent from the
+        data the HTML was rendered from."""
+        for owner, choice in [('Marcus', 'for'), ('Nick', 'against'), ('Luke', 'abstain')]:
+            RulesVote.objects.create(
+                proposal=self.proposals[0], team=self.teams[owner], choice=choice
+            )
+
+        row = self.as_b().context['rows'][0]
+        self.assertEqual(row['results'], [])
+        self.assertEqual(row['mine'], '')
+
+    def test_my_own_vote_is_the_one_thing_i_do_see(self):
+        RulesVote.objects.create(
+            proposal=self.proposals[0], team=self.b_team, choice='abstain'
+        )
+        self.assertEqual(self.as_b().context['rows'][0]['mine'], 'abstain')
+
+    def test_a_note_is_private_until_the_ballot_closes(self):
+        RulesSuggestion.objects.create(
+            poll=self.poll, team=self.a_team, text='Option C would be better.'
+        )
+
+        self.assertNotContains(self.as_b(), 'Option C would be better.')
+        self.close()
+        response = self.as_b()
+        self.assertContains(response, 'Option C would be better.')
+        self.assertContains(response, 'Marcus')
+
+    def test_i_can_always_see_my_own_note(self):
+        RulesSuggestion.objects.create(
+            poll=self.poll, team=self.b_team, text='Mine, while it is open.'
+        )
+        self.assertContains(self.as_b(), 'Mine, while it is open.')
+
+    def test_the_recorded_outcome_waits_for_the_close_too(self):
+        self.proposals[0].outcome = RulesProposal.Outcome.PASSED
+        self.proposals[0].save(update_fields=['outcome'])
+
+        self.assertNotContains(self.as_b(), 'Recorded outcome')
+        self.close()
+        self.assertContains(self.as_b(), 'Recorded outcome')
+
+
+class RulesBallotSavingTests(TestCase):
+    """POSTing the ballot: what is written, what is left alone, what is refused."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        make_draft(self.season, self.teams, rounds=1)
+
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = self.teams['Isaac']
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+
+        self.poll, self.proposals = make_ballot(self.season)
+        self.client.force_login(self.user)
+
+    def send(self, follow=False, **fields):
+        """POST a ballot. Keys like p1/p2/p3 name proposals by ballot order."""
+        data = {}
+        for key, value in fields.items():
+            if key == 'text':
+                data['text'] = value
+            else:
+                data[f'proposal-{self.proposals[int(key[1:]) - 1].pk}'] = value
+        return self.client.post(reverse('rules_vote'), data, follow=follow)
+
+    def choice_of(self, order):
+        return RulesVote.objects.get(proposal=self.proposals[order - 1]).choice
+
+    def test_all_three_answers_are_saved_at_once(self):
+        self.send(p1='for', p2='against', p3='abstain')
+
+        self.assertEqual(RulesVote.objects.count(), 3)
+        self.assertEqual(
+            [self.choice_of(n) for n in (1, 2, 3)], ['for', 'against', 'abstain']
+        )
+
+    def test_the_vote_is_stored_against_my_team(self):
+        self.send(p1='for')
+        self.assertEqual(RulesVote.objects.get().team, self.isaac)
+
+    def test_the_team_is_never_taken_from_the_request(self):
+        """A forged team field changes nothing: the view does not read one."""
+        self.client.post(reverse('rules_vote'), {
+            f'proposal-{self.proposals[0].pk}': 'for',
+            'team': self.teams['Marcus'].pk,
+            'team_id': self.teams['Marcus'].pk,
+        })
+        self.assertEqual(RulesVote.objects.get().team, self.isaac)
+
+    def test_a_good_post_redirects_back(self):
+        """Post/Redirect/Get, so a refresh cannot send the ballot twice."""
+        self.assertRedirects(self.send(p1='for'), reverse('rules_vote'))
+
+    def test_changing_my_mind_replaces_the_row(self):
+        self.send(p1='for')
+        self.send(p1='against')
+
+        self.assertEqual(RulesVote.objects.count(), 1)
+        self.assertEqual(self.choice_of(1), 'against')
+
+    def test_a_blank_radio_group_leaves_a_stored_vote_untouched(self):
+        """The one non-obvious bit of the form. Because the page pre-checks what
+        you chose, blank only ever happens on one you never answered."""
+        self.send(p1='for', p2='against')
+        self.send(p2='abstain')
+
+        self.assertEqual(self.choice_of(1), 'for')
+        self.assertEqual(self.choice_of(2), 'abstain')
+
+    def test_a_blank_radio_group_does_not_invent_an_abstention(self):
+        """Abstaining is something you choose, not something that happens to
+        you by not choosing."""
+        self.send(p1='for')
+        self.assertEqual(RulesVote.objects.count(), 1)
+
+    def test_a_choice_that_is_not_one_of_the_three_is_ignored(self):
+        self.send(p1='maybe-later')
+        self.assertFalse(RulesVote.objects.exists())
+
+    def test_a_proposal_from_another_ballot_is_refused(self):
+        """Scoped to this poll's own proposals, so a foreign id is never looked
+        for -- the same trick draft_poll_vote plays with its option id."""
+        other_season = Season.objects.create(year=2025)
+        _, other_proposals = make_ballot(other_season, count=1)
+
+        self.client.post(
+            reverse('rules_vote'), {f'proposal-{other_proposals[0].pk}': 'for'}
+        )
+        self.assertFalse(RulesVote.objects.exists())
+
+    def test_the_confirmation_says_how_much_is_in(self):
+        response = self.send(p1='for', p2='for', follow=True)
+        self.assertContains(response, 'you have voted on 2 of 3')
+
+    def test_the_confirmation_repeats_that_it_is_secret(self):
+        response = self.send(p1='for', follow=True)
+        self.assertContains(response, 'until the vote closes')
+
+    def test_a_note_is_saved_against_my_team(self):
+        self.send(p1='for', text='I would rather have Option C.')
+
+        note = RulesSuggestion.objects.get()
+        self.assertEqual(note.team, self.isaac)
+        self.assertEqual(note.text, 'I would rather have Option C.')
+
+    def test_a_second_note_replaces_the_first(self):
+        self.send(text='First thought.')
+        self.send(text='Second thought.')
+
+        self.assertEqual(RulesSuggestion.objects.count(), 1)
+        self.assertEqual(RulesSuggestion.objects.get().text, 'Second thought.')
+
+    def test_an_empty_box_takes_my_note_back_down(self):
+        self.send(text='Never mind, actually.')
+        self.send(text='   ')
+
+        self.assertFalse(RulesSuggestion.objects.exists())
+
+    def test_an_empty_box_with_nothing_to_retract_is_harmless(self):
+        self.assertRedirects(self.send(text=''), reverse('rules_vote'))
+        self.assertFalse(RulesSuggestion.objects.exists())
+
+    def test_the_note_is_not_required_to_vote(self):
+        self.send(p1='for')
+        self.assertEqual(RulesVote.objects.count(), 1)
+        self.assertFalse(RulesSuggestion.objects.exists())
+
+    def test_retracting_a_note_does_not_retract_my_votes(self):
+        self.send(p1='for', text='A thought.')
+        self.send(text='')
+
+        self.assertEqual(self.choice_of(1), 'for')
+        self.assertFalse(RulesSuggestion.objects.exists())
+
+
+class RulesPageCalloutTests(TestCase):
+    """The rules page tells you when the rules are up for a vote."""
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        make_draft(self.season, self.teams, rounds=1)
+
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = self.teams['Isaac']
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+        self.client.force_login(self.user)
+
+    def get(self):
+        return self.client.get(reverse('rules'))
+
+    def test_no_ballot_means_no_callout(self):
+        self.assertNotContains(self.get(), 'A vote is open')
+
+    def test_an_open_ballot_is_announced_with_its_size(self):
+        make_ballot(self.season)
+        response = self.get()
+
+        self.assertContains(response, 'A vote is open on 3 changes to these rules.')
+        self.assertContains(response, reverse('rules_vote'))
+
+    def test_one_proposal_is_one_change(self):
+        make_ballot(self.season, count=1)
+        self.assertContains(self.get(), 'A vote is open on 1 change to these rules.')
+
+    def test_a_closed_ballot_is_not_announced(self):
+        make_ballot(self.season, closed=True)
+        self.assertNotContains(self.get(), 'A vote is open')
+
+    def test_the_rules_themselves_still_render(self):
+        make_ballot(self.season)
+        self.assertContains(self.get(), 'Keeper Structure')

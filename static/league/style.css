@@ -1629,6 +1629,134 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 .poll-alt { margin-top: 2rem; }
 .poll-alt h2 { font-size: 1.15rem; }
 
+
+/* Rules vote -------------------------------------------------------------- */
+
+/* On the rules page: there is a live ballot on the rules you are reading. */
+.rules-vote-callout {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #e6c88a;
+  border-radius: 6px;
+  background: #fdf3e3;
+}
+
+/* The one thing on the ballot a manager must read before voting, so it gets the
+   accent bar rather than the muted .note treatment the rest of the asides use. */
+.ballot-secrecy {
+  max-width: 62ch;
+  padding: 0.6rem 0.9rem;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 5px 5px 0;
+}
+
+.proposal {
+  margin: 1.6rem 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.proposal h2 { font-size: 1.2rem; margin: 0; }
+.proposal h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 0.2rem; }
+.proposal p { margin: 0.4rem 0; }
+.proposal-ref { color: var(--muted); font-size: 0.9rem; margin-top: 0.15rem; }
+
+/* Two columns where there is room, one where there is not. auto-fit with a
+   minimum column width does that without a media query and without a breakpoint
+   to keep in step with the board's -- the columns stack when they no longer
+   fit, which is the actual condition. */
+.proposal-texts,
+.proposal-cases {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 0.9rem;
+  margin: 0.9rem 0;
+}
+
+.proposal-text {
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+
+/* The proposed wording is the change, so it gets the outline. Same size type as
+   the current wording -- this marks which is which, not which is better. */
+.proposal-text.proposed { background: none; border: 1px dashed var(--accent); }
+
+/* The two cases are visually identical on purpose. The commissioner wrote both
+   and votes on the result; giving "for" the larger type would be a thumb on the
+   scale nobody agreed to. */
+.proposal-case { font-size: 0.95rem; }
+
+.proposal-note {
+  margin: 0.9rem 0;
+  padding: 0.5rem 0.8rem;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.ballot-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 1rem 0 0.4rem;
+  padding: 0.5rem 0.8rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.ballot-choice legend { padding: 0 0.3rem; font-weight: 600; font-size: 0.9rem; }
+
+/* A real radio inside a clickable label, not a styled div: the browser gives us
+   arrow-key movement within the group, and the label makes the whole pill a hit
+   target. The checked state is drawn on the label AND left on the radio, so it
+   survives with CSS off. */
+.ballot-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.ballot-option:hover { border-color: var(--muted); }
+.ballot-option.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.ballot-option:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.ballot-turnout { color: var(--muted); font-size: 0.9rem; }
+
+.ballot-results {
+  margin-top: 1rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+}
+
+.ballot-tally { list-style: none; padding: 0; margin: 0.3rem 0; }
+.ballot-tally li { margin-bottom: 0.2rem; }
+.ballot-tally .subtle { margin-left: 0.4rem; font-size: 0.9rem; }
+.ballot-outcome { margin-top: 0.5rem; }
+
+.ballot-closing {
+  margin: 1.6rem 0;
+  padding: 0.7rem 1rem;
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 0 5px 5px 0;
+}
+
+.ballot-note { margin-top: 2rem; }
+.ballot-note h2 { font-size: 1.15rem; }
+.ballot-note textarea { width: 100%; max-width: 46rem; font: inherit; padding: 0.5rem; border: 1px solid #c8cdd4; border-radius: 4px; }
+
+.ballot-submit { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-top: 1.2rem; }
+
 @media print {
   /* Site furniture is navigation; on paper there is nowhere to navigate to.
      The button would print as an empty pill, which is worse than most. */

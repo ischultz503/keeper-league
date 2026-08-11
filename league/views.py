@@ -17,7 +17,8 @@ from . import draft_sim
 from . import keeper_engine as engine
 from . import names
 from . import poll as poll_logic
-from .forms import DraftPollAlternativeForm, FeedbackForm
+from . import rules_vote as ballot
+from .forms import DraftPollAlternativeForm, FeedbackForm, RulesSuggestionForm
 from .models import (
     DraftPick,
     DraftPoll,
@@ -29,6 +30,9 @@ from .models import (
     KeeperSelection,
     Player,
     RosterEntry,
+    RulesPoll,
+    RulesSuggestion,
+    RulesVote,
     Season,
     Team,
 )
@@ -965,18 +969,32 @@ def rules(request):
 
     Reading at request time (rather than at import) means editing
     docs/keeper_rules_v3.md updates the page immediately -- no restart, no
-    deploy, no second copy of the rules to drift out of sync.
+    deploy, no second copy of the rules to drift out of sync. It is also what
+    makes hand-editing that file the whole of "applying a passed rule change":
+    the app records votes and never rewrites the rules.
+
+    The open-ballot callout is here because someone reading the rules is the
+    single most likely person to care that they might be about to change.
     """
+    # Two queries on a ten-row table, and only while a ballot exists.
+    open_vote = _open_rules_poll()
+    context = {
+        'open_vote': open_vote,
+        'proposal_count': open_vote.proposals.count() if open_vote else 0,
+    }
+
     try:
         source = RULES_PATH.read_text(encoding='utf-8')
     except OSError:
-        return render(request, 'league/rules.html', {'rules_html': None})
+        return render(request, 'league/rules.html', {**context, 'rules_html': None})
 
     # mark_safe is only appropriate because this file is repo-controlled and
     # authored by the commissioner -- never do this with user-submitted text.
     html = markdown.markdown(source, extensions=['tables', 'sane_lists'])
 
-    return render(request, 'league/rules.html', {'rules_html': mark_safe(html)})
+    return render(
+        request, 'league/rules.html', {**context, 'rules_html': mark_safe(html)}
+    )
 
 
 @login_required
@@ -1124,10 +1142,15 @@ def _poll_state(poll, teams=None):
 def draft_poll(request):
     """The draft-time poll: a public grid of who can make which candidate time.
 
-    Public BY DESIGN. Unlike KeeperPrediction -- private to one user, and read
+    THE PUBLIC ONE. Unlike KeeperPrediction -- private to one user, and read
     back filtered by request.user -- every answer here is visible to every
     manager, and the page says so in as many words. A scheduling grid you
     cannot see the other rows of is just a form.
+
+    rules_vote is the private counterpart: same team-keyed shape, opposite
+    visibility rule, because a governance ballot you can read before voting is
+    one where voting last is worth something. Neither should be "fixed" to match
+    the other.
 
     The GET renders the whole grid server-side, so the page is complete before
     any JavaScript runs. The POST is the "when else?" note, which is a plain
@@ -1325,3 +1348,216 @@ def draft_poll_state(request):
     state = _poll_state(poll)
     state['changed'] = True
     return JsonResponse(state)
+
+
+# --- The rules vote ---------------------------------------------------------
+#
+# The ballot for section 8 rule changes. SECRET WHILE OPEN: a manager sees their
+# own answers and nothing else -- no tallies, no other teams' positions -- and
+# closing the poll publishes all of it at once. That is the deliberate opposite
+# of the draft poll above, and the difference is not decoration: a scheduling
+# grid only works if you can see who else can make it, while a governance ballot
+# you can read before voting is one where voting last is worth something.
+#
+# The secrecy is enforced in the view, not the template. Nothing about another
+# team ever reaches the context while the ballot is open, so there is no CSS
+# rule, no {% if %} and no JSON payload standing between a rival's vote and
+# somebody's View Source.
+#
+# Votes are keyed to Team, never to User, exactly as in the draft poll: the team
+# comes from _own_team(), and no view here reads a team id from the client.
+
+
+def _current_rules_poll():
+    """The rules ballot for the season being drafted, or None."""
+    season = keeper_season()
+    if season is None:
+        return None
+    return RulesPoll.objects.filter(season=season).select_related('season').first()
+
+
+def _open_rules_poll():
+    """The current ballot only while it is still taking votes, else None.
+
+    Its own function because "is there a vote on?" is a different question from
+    "is there a ballot?", and the rules page only cares about the first.
+    """
+    poll = _current_rules_poll()
+    return poll if (poll is not None and not poll.closed) else None
+
+
+def _record_ballot(data, proposals, team):
+    """Write this team's answers. Returns how many rows were touched.
+
+    Two things worth spelling out.
+
+    A BLANK RADIO GROUP LEAVES ANY STORED VOTE ALONE. It does not clear it and
+    it does not store an abstention -- abstaining is a thing you choose, not a
+    thing that happens to you by not choosing. Because the page pre-checks what
+    you already picked, a blank group only ever happens on a proposal you have
+    never voted on, so "leave it alone" and "leave it unvoted" are the same
+    outcome in practice. This is the one part of the form whose behaviour is not
+    obvious from looking at it.
+
+    THE PROPOSAL IDS COME FROM US, NOT FROM THE POST. Iterating this poll's own
+    proposals and reading the field named after each one is the same scoping
+    draft_poll_vote does with its option id: a proposal id from another poll, or
+    another season, is simply never looked for, so there is no lookup to get
+    wrong.
+    """
+    saved = 0
+    for proposal in proposals:
+        choice = data.get(f'proposal-{proposal.pk}', '')
+        if choice not in RulesVote.Choice.values:
+            continue
+        # update_or_create is one UPDATE or one INSERT, and it cooperates with
+        # the (proposal, team) unique constraint rather than racing it.
+        RulesVote.objects.update_or_create(
+            proposal=proposal, team=team, defaults={'choice': choice}
+        )
+        saved += 1
+    return saved
+
+
+@login_required
+def rules_vote(request):
+    """The rules ballot: read the three changes, vote, add a note.
+
+    THE PRIVATE ONE. While the ballot is open a manager sees their own answers
+    and a bare turnout count, and nothing whatsoever about how anyone else
+    voted; ticking `closed` in the admin publishes every vote and every note to
+    everyone. draft_poll is the PUBLIC one, where every answer is visible from
+    the start. Both docstrings name the other because the pair of them looks
+    like an inconsistency until you know it was chosen: a scheduling grid and a
+    governance ballot are different things.
+
+    A plain form -- radios, a textarea, one Save button, POST, redirect -- with
+    no JavaScript at all. The draft poll needs its fifteen-second polling
+    because other people's answers are the point of the page; here there is
+    nothing to watch until the vote closes. Submitting the lot in one go is also
+    what lets someone answer all three, reconsider, and commit them together,
+    which is what you actually want on a vote.
+    """
+    poll = _current_rules_poll()
+    if poll is None:
+        return render(request, 'league/rules_vote.html', {'poll': None})
+
+    own_team = _own_team(request)
+    proposals = list(poll.proposals.all())
+    mine = (
+        RulesSuggestion.objects.filter(poll=poll, team=own_team).first()
+        if own_team else None
+    )
+
+    if request.method == 'POST':
+        # Both refusals live HERE rather than in the template's {% if %}. A
+        # button that is not drawn is a suggestion; this is the load-bearing part.
+        if own_team is None:
+            return HttpResponseForbidden('No team is linked to your login.')
+        if poll.closed:
+            return HttpResponseForbidden('This vote is closed.')
+
+        form = RulesSuggestionForm(request.POST, instance=mine)
+        if form.is_valid():
+            _record_ballot(request.POST, proposals, own_team)
+
+            # Same contract as the draft poll's note: instance=mine makes the
+            # save an UPDATE rather than an append, and an empty box retracts.
+            if not form.cleaned_data['text']:
+                if mine is not None:
+                    mine.delete()
+            else:
+                note = form.save(commit=False)
+                note.poll = poll
+                note.team = own_team
+                note.save()
+
+            answered = RulesVote.objects.filter(
+                proposal__poll=poll, team=own_team
+            ).count()
+            messages.success(
+                request,
+                f'Ballot saved — you have voted on {answered} of {len(proposals)}. '
+                'Nobody can see your answers until the vote closes.',
+            )
+            return redirect('rules_vote')
+    else:
+        form = RulesSuggestionForm(instance=mine)
+
+    team_count = Team.objects.count()
+
+    # My own answers, always. One query, filtered to my team.
+    my_choices = (
+        dict(
+            RulesVote.objects
+            .filter(proposal__poll=poll, team=own_team)
+            .values_list('proposal_id', 'choice')
+        )
+        if own_team else {}
+    )
+
+    # How many teams have answered each proposal -- a count of stored rows, with
+    # no choices in it. This is the ONLY thing about other people that crosses
+    # into an open ballot's context.
+    turnout_counts = {
+        row['proposal']: row['n']
+        for row in RulesVote.objects
+        .filter(proposal__poll=poll)
+        .values('proposal')
+        .annotate(n=Count('pk'))
+    }
+
+    # Everyone's votes, and only once the ballot is closed. The guard is the
+    # query, not the template: while it is open this list is empty, so there is
+    # nothing in the response for anyone to dig out.
+    others = (
+        list(
+            RulesVote.objects.filter(proposal__poll=poll).select_related('team')
+        )
+        if poll.closed else []
+    )
+    by_proposal = {}
+    for vote in others:
+        by_proposal.setdefault(vote.proposal_id, []).append(vote)
+
+    rows = []
+    for proposal in proposals:
+        cast = by_proposal.get(proposal.pk, [])
+        counts = ballot.count([vote.choice for vote in cast])
+        rows.append({
+            'proposal': proposal,
+            'mine': my_choices.get(proposal.pk, ''),
+            'turnout': ballot.turnout(team_count, turnout_counts.get(proposal.pk, 0)),
+            # Empty while open, for the reason above. Grouped by choice here
+            # rather than in the template, which cannot look a dict up by key.
+            'results': [
+                {
+                    'value': value,
+                    'label': label,
+                    'count': counts[value],
+                    'teams': [
+                        vote.team.owner_name for vote in cast if vote.choice == value
+                    ],
+                }
+                for value, label in RulesVote.Choice.choices
+            ] if poll.closed else [],
+        })
+
+    return render(request, 'league/rules_vote.html', {
+        'poll': poll,
+        'own_team': own_team,
+        'rows': rows,
+        'form': form,
+        'can_vote': own_team is not None and not poll.closed,
+        # The three answers come from the model's own TextChoices, so the radios
+        # and the database cannot drift apart.
+        'choices': [
+            {'value': value, 'label': label}
+            for value, label in RulesVote.Choice.choices
+        ],
+        # Mine only while open; everyone's once closed -- same rule as the votes.
+        'suggestions': (
+            poll.suggestions.select_related('team').all() if poll.closed
+            else ([mine] if mine else [])
+        ),
+    })
