@@ -72,3 +72,14 @@ Keeper legality is scenario-dependent: a player's cost round is fixed, but the b
 - Write migrations via `makemigrations` — never hand-edit the DB.
 - Commit at the end of each working step with a clear message.
 - Keeper business logic goes in plain Python functions/methods (easy to unit test), not buried in views or templates.
+
+## Rules votes
+
+Section 8 changes are voted on in the app at `/rules-vote/` (models `RulesPoll` / `RulesProposal` / `RulesVote` / `RulesSuggestion`, seeded by `python manage.py seed_rules_poll`). Two rules about what that does and does not mean:
+
+- **The app records votes; it does not compute outcomes.** Section 8 says "majority vote" and never defines majority of what — the league, or the votes cast. So there is no threshold, no quorum rule and no `passed` flag anywhere in the code (see `league/rules_vote.py`). The page shows the counts, and the commissioner records `RulesProposal.outcome` by hand.
+- **The app never rewrites the rules doc.** A passed change is applied by hand-editing `docs/keeper_rules_v3.md` and adding an entry to `docs/keeper_rules_changelog.md` with a date. `views.rules` reads that file fresh on every request, so editing it *is* the deploy — no restart, no migration, no second copy to drift.
+
+The ballot is **secret while open and public the moment it closes** — `RulesPoll.closed` does both jobs. That is enforced in `views.rules_vote` (other teams' votes are never queried while the poll is open) and in the admin summary too, since the commissioner is a voting member. Do not "harmonise" it with the draft poll, which is public by design.
+
+Open questions not yet on a ballot live in `docs/league_votes.md`.
