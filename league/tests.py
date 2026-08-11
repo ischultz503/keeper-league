@@ -13,6 +13,7 @@ import tempfile
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -3500,3 +3501,32 @@ class EligibilityPageTests(TestCase):
         self.assertContains(response, 'Keeper Costs')
         # The tables extension must be on, or section 6's draft order is lost.
         self.assertContains(response, '<table>')
+
+    def test_the_rules_page_offers_a_pdf(self):
+        """Rendered hidden and revealed by rules.js: the button can only work
+        through window.print(), so without JavaScript there must be no button
+        rather than a dead one."""
+        self.client.force_login(self.user)
+        html = self.client.get(reverse('rules')).content.decode()
+
+        self.assertIn('id="print-rules" hidden', html)
+        self.assertIn('league/rules.js', html)
+
+    def test_the_rules_page_title_names_the_saved_file(self):
+        """Browsers name a printed PDF after the page title, so this one has to
+        say what the document is on its own -- "League Rules.pdf" could have
+        come from anywhere."""
+        self.client.force_login(self.user)
+
+        self.assertContains(
+            self.client.get(reverse('rules')), '<title>Keeper League Rules</title>'
+        )
+
+    def test_a_missing_rules_file_offers_no_pdf_button(self):
+        """Nothing to print, so nothing to offer."""
+        self.client.force_login(self.user)
+        with mock.patch.object(views, 'RULES_PATH', Path('does-not-exist.md')):
+            html = self.client.get(reverse('rules')).content.decode()
+
+        self.assertNotIn('id="print-rules"', html)
+        self.assertIn('missing from the deployment', html)

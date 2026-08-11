@@ -1184,6 +1184,93 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 }
 
 
+/* Printing / Save as PDF --------------------------------------------------- */
+
+/* The rules page's "Save as PDF" button is just window.print(), so everything
+   that makes the saved file worth keeping is here. Top level rather than inside
+   the @media print block below: @page only ever applies to paper anyway, and
+   nesting it is the less well-supported spelling. */
+@page {
+  margin: 18mm 16mm;
+}
+
+/* Right-aligned toolbar above a document. Its own rule rather than reusing
+   .board-head, which is a two-column title/controls layout this has no title
+   for. The button itself is the shared pill from the board. */
+.doc-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.6rem;
+}
+
+@media print {
+  /* Site furniture is navigation; on paper there is nowhere to navigate to.
+     The button would print as an empty pill, which is worse than most. */
+  .site-header,
+  footer,
+  .doc-controls { display: none; }
+
+  body {
+    background: #fff;
+    color: #000;
+  }
+
+  /* The page's own margins come from @page now, and the card's frame is screen
+     decoration -- on paper the paper is the card. */
+  main,
+  main.wide {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .prose {
+    background: none;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+  }
+
+  /* Points, not rems: print is the one place a physical unit is the honest one,
+     and 10.5pt body is what a rules doc should read at in the hand. */
+  .prose { font-size: 10.5pt; line-height: 1.45; }
+  .prose h1 { font-size: 19pt; margin-bottom: 0.4em; }
+  .prose h2 { font-size: 13pt; margin-top: 16pt; }
+  .prose h3 { font-size: 11.5pt; margin-top: 12pt; }
+  .prose th, .prose td { font-size: 9.5pt; }
+
+  /* A heading stranded at the foot of a page is the classic print bug: the
+     rule it introduces is overleaf, so the page ends on a promise. */
+  .prose h1,
+  .prose h2,
+  .prose h3 { break-after: avoid; page-break-after: avoid; }
+
+  /* And these should not be split down the middle across a page break. */
+  .prose li,
+  .prose tr,
+  .prose blockquote { break-inside: avoid; page-break-inside: avoid; }
+
+  /* Section 6's draft order runs long enough to cross a page; repeat its header
+     row there rather than leaving a column of bare numbers. */
+  .prose thead { display: table-header-group; }
+
+  /* Grey-on-white is a screen luxury: it prints weak, and these carry rules
+     text. Ink is cheap and the emphasis is already in the markup. */
+  .prose em,
+  .prose blockquote { color: #000; }
+
+  .prose blockquote { border-left-color: #666; }
+  .prose th { background: none; border-bottom: 1px solid #000; }
+
+  /* Underlined and black: a link's colour means nothing once it is printed. */
+  a { color: #000; text-decoration: underline; }
+
+  code {
+    background: none;
+    border: 1px solid #ccc;
+  }
+}
+
 /* Login ------------------------------------------------------------------- */
 
 .card {

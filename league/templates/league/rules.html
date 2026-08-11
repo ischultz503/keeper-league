@@ -1,14 +1,30 @@
 {% extends "base.html" %}
+{% load static %}
 
-{% block title %}League Rules{% endblock %}
+{% comment %}
+  The page title is what browsers name the saved file, so this reads
+  "Keeper League Rules.pdf" rather than the barer "League Rules.pdf".
+{% endcomment %}
+{% block title %}Keeper League Rules{% endblock %}
 
 {% block content %}
 {% if rules_html %}
+  {% comment %}
+    Hidden until rules.js reveals it. The button can only work through
+    window.print(), so with no JavaScript it would be a control that does
+    nothing -- better to not offer it at all than to offer a dead one.
+  {% endcomment %}
+  <div class="doc-controls">
+    <button type="button" class="board-btn ghost" id="print-rules" hidden>Save as PDF</button>
+  </div>
+
   {% comment %}
     Already converted to HTML and marked safe in the view. The source file is
     repo-controlled, so this is not user input being trusted.
   {% endcomment %}
   <article class="prose">{{ rules_html }}</article>
+
+  <script src="{% static 'league/rules.js' %}" defer></script>
 {% else %}
   <h1>League Rules</h1>
   <p class="error">
