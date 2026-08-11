@@ -3314,6 +3314,54 @@ class TemplateCommentTests(SimpleTestCase):
         )
 
 
+class PrintStylesheetTests(SimpleTestCase):
+    """rules.js promises "the @media print block is what makes the output worth
+    saving". This is the test that the block keeps that promise.
+
+    A documented behaviour the code does not have is worse than an undocumented
+    gap: the comment stops anyone going to look. Nothing else in the suite can
+    see a stylesheet, so the check is a plain read of the file -- crude, but it
+    catches the two things that actually go wrong, which are the block being
+    removed wholesale and a new banner being added without being hidden.
+    """
+
+    def print_block(self):
+        source = (
+            Path(settings.BASE_DIR) / 'static' / 'league' / 'style.css'
+        ).read_text(encoding='utf-8')
+        start = source.index('@media print {')
+        # Depth-count the braces rather than searching for '}', which would stop
+        # at the end of the first rule inside the block.
+        depth, index = 0, start
+        for index in range(start, len(source)):
+            if source[index] == '{':
+                depth += 1
+            elif source[index] == '}':
+                depth -= 1
+                if depth == 0:
+                    break
+        return source[start:index + 1]
+
+    def test_the_block_the_comment_promises_exists(self):
+        self.assertIn('.prose', self.print_block())
+
+    def test_site_furniture_is_hidden(self):
+        """Header, footer, the toolbar, and anything that is a reply to a click
+        rather than part of the document."""
+        block = self.print_block()
+        for selector in ['.site-header', 'footer', '.doc-controls',
+                         '.messages', '.rules-vote-callout']:
+            with self.subTest(selector=selector):
+                self.assertIn(selector, block)
+
+    def test_the_rules_tables_keep_their_borders(self):
+        """Section 6's draft order is a table; unbordered it is a wall of names."""
+        self.assertIn('border-bottom: 1px solid #000', self.print_block())
+
+    def test_the_body_text_drops_to_a_print_measure(self):
+        self.assertIn('font-size: 10.5pt', self.print_block())
+
+
 class RosterOrderingTests(TestCase):
     """Drafted players sort by round; undrafted sort last."""
 

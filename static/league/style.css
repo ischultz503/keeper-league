@@ -1759,9 +1759,19 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 
 @media print {
   /* Site furniture is navigation; on paper there is nowhere to navigate to.
-     The button would print as an empty pill, which is worse than most. */
+     The button would print as an empty pill, which is worse than most.
+
+     .messages is here because a flash message is a reply to something you just
+     did -- "your ballot is saved" baked into a printed rulebook is a sentence
+     that was true for one second in 2026.
+
+     .rules-vote-callout for the same reason and a sharper one: a saved rulebook
+     should not carry a link to a vote that closed months before whoever is
+     holding it read it. */
   .site-header,
   footer,
+  .messages,
+  .rules-vote-callout,
   .doc-controls { display: none; }
 
   body {
