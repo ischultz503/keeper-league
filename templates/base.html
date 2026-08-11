@@ -18,6 +18,7 @@
         {# The year comes from league.context_processors.nav, not a literal. #}
         <a href="{% url 'league_overview' %}">{% if nav_roster_season %}{{ nav_roster_season.year }} {% endif %}Standings</a>
         <a href="{% url 'eligibility' %}">Eligibility</a>
+        <a href="{% url 'feedback' %}">Site feedback</a>
         {% if user.is_staff %}<a href="{% url 'admin:index' %}">Admin</a>{% endif %}
         <span class="who">{{ user.username }}</span>
         {# Django 5+ requires POST for logout, so this is a form, not a link. #}
@@ -32,6 +33,22 @@
   </header>
 
   <main class="{% block main_class %}{% endblock %}">
+    {% comment %}
+      django.contrib.messages: a view calls messages.success(request, '...'),
+      the message is stashed in the session, and it appears exactly once on the
+      next page the user loads -- which is what makes it the right tool after a
+      redirect, where the view that did the work no longer renders anything.
+      Installed and wired up in settings from the start; this is the first page
+      that had anywhere to put one.
+    {% endcomment %}
+    {% if messages %}
+      <ul class="messages">
+        {% for message in messages %}
+          <li class="{{ message.tags }}">{{ message }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+
     {% block content %}{% endblock %}
   </main>
 

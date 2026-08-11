@@ -407,3 +407,48 @@ class KeeperSelection(models.Model):
                     f'Keepers for {self.season.year} must come from the '
                     f'{self.season.year - 1} roster.'
                 )
+
+
+class Feedback(models.Model):
+    """A note from a manager about the site itself.
+
+    Nothing to do with the keeper rules -- this is the suggestion box. It is
+    stored rather than emailed so the commissioner can work through it in the
+    admin, and so a manager can see that theirs landed.
+    """
+
+    class Kind(models.TextChoices):
+        IDEA = 'idea', 'Something to add'
+        CHANGE = 'change', 'Something to change'
+        PROBLEM = 'problem', 'Something is broken'
+
+    # SET_NULL rather than CASCADE: if a login is ever removed (the Cognito
+    # swap is coming), the suggestion is still worth reading. Attribution goes,
+    # the substance stays.
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='feedback',
+    )
+    kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.IDEA)
+    message = models.TextField()
+    # Where they were when they hit the tab. Filled in by the view, not typed:
+    # "the board is unreadable" is a different bug report depending on the page.
+    page = models.CharField(max_length=200, blank=True)
+    created = models.DateTimeField(auto_now_add=True)
+    # The commissioner's tick in the admin. Shown back to the submitter, so
+    # sending a note does not feel like shouting into a well.
+    resolved = models.BooleanField(
+        default=False,
+        help_text='Tick once this has been done, or decided against.',
+    )
+
+    class Meta:
+        ordering = ['-created']
+        verbose_name_plural = 'feedback'
+
+    def __str__(self):
+        who = self.user.username if self.user else 'someone'
+        return f'{who}: {self.message[:50]}'

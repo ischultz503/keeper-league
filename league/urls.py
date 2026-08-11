@@ -22,6 +22,9 @@ urlpatterns = [
     path('my-team/', views.my_team, name='my_team'),
     path('eligibility/', views.eligibility, name='eligibility'),
     path('rules/', views.rules, name='rules'),
+    # The suggestion box. Same route for the form and its submission, which is
+    # what lets the view redirect back to itself after a successful POST.
+    path('feedback/', views.feedback, name='feedback'),
     # JSON endpoint for the board's keeper sandbox. Namespaced under /api/ to
     # keep it obviously separate from the HTML pages.
     path('api/keeper-preview/', views.keeper_preview, name='keeper_preview'),

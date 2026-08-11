@@ -531,9 +531,30 @@
   var ANCHOR_GAP = 10;          // px between the cell and the panel
   var EDGE_MARGIN = 8;          // keep this clear of the viewport edges
 
+  /* On a phone the panel is not anchored to a cell at all -- it is a sheet
+   * pinned to the bottom of the viewport (see the matching rule in style.css).
+   * Anchoring means absolute PAGE coordinates, and on a phone that put the
+   * panel wherever you had scrolled to and then fought you to keep it there.
+   * Pinned to the viewport it needs no placing, so scrolling is just scrolling.
+   * Matches the CSS breakpoint; if the two ever disagree the panel gets inline
+   * coordinates it cannot use. */
+  var sheetQuery = window.matchMedia('(max-width: 700px)');
+
+  function isSheet() { return sheetQuery.matches; }
+
   function placePanel() {
     var cell = cellFor(pending.pick_id);
     var moved = dragOffset.x || dragOffset.y;
+
+    if (isSheet()) {
+      if (cell) cell.classList.add('on-the-clock');
+      // Clear anything a wider layout left behind: `top`/`left` set inline
+      // would override the sheet's own bottom-of-the-viewport geometry.
+      modal.style.left = '';
+      modal.style.top = '';
+      modal.classList.add('detached');
+      return;
+    }
 
     if (!cell) {
       // The pick is in a round the board is not currently showing. Park the
@@ -565,10 +586,18 @@
     var tail = box.left + window.scrollX - left + (box.width / 2);
     modal.style.setProperty('--tail-x', Math.max(12, Math.min(tail, modal.offsetWidth - 20)) + 'px');
     modal.classList.toggle('detached', Boolean(moved));
+  }
 
-    // Put the cell in the middle of the screen, which leaves the rounds above
-    // it visible and room below for the panel.
-    cell.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  /* Deliberately NOT part of placePanel. Scrolling the page is something to do
+   * once, when a pick opens; placePanel also runs on resize, and on a phone
+   * "resize" fires every time the URL bar slides away as you scroll. Wired
+   * together, every swipe yanked the page back to re-centre this cell, which
+   * is why the board would only come to rest in a few fixed places. */
+  function revealCell() {
+    var cell = cellFor(pending.pick_id);
+    // Middle of the screen: the rounds above stay readable, and on a phone the
+    // cell clears the sheet across the bottom.
+    if (cell) cell.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
 
   function clearOnTheClock() {
@@ -579,6 +608,10 @@
 
   function startDrag(event) {
     if (event.target.closest('.modal-close')) return;
+    // Nothing to drag a sheet to: it spans the width and sits on the bottom
+    // edge. Without this a tap on the header on a phone (which synthesises a
+    // mousedown) would start a drag that inline-positions the sheet off-screen.
+    if (isSheet()) return;
 
     var box = modal.getBoundingClientRect();
     var grabX = event.clientX - box.left;
@@ -624,7 +657,12 @@
 
     clearOnTheClock();
     modal.hidden = false;
+    // On a phone the sheet covers the bottom of the viewport, so the last
+    // rounds would be unreachable behind it. This is the room to scroll them
+    // clear; the class comes off again when the panel closes.
+    document.body.classList.add('picking');
     placePanel();               // needs to be visible first, to have a width
+    revealCell();
     search.focus({ preventScroll: true });
   }
 
@@ -632,6 +670,7 @@
     // Deliberately does NOT abandon the draft: the sim stays paused here and
     // "Continue draft" reopens exactly this pick.
     if (modal) modal.hidden = true;
+    document.body.classList.remove('picking');
     clearOnTheClock();
   }
 
@@ -741,9 +780,18 @@
       if (event.key === 'Escape' && !modal.hidden) closeModal();
     });
 
-    // Reflow if the window changes size while a pick is open -- the clamp
-    // against the right edge depends on the viewport width.
+    // Reflow if the window changes WIDTH while a pick is open -- the clamp
+    // against the right edge, and the sheet breakpoint, both depend on it.
+    //
+    // Width only, on purpose. A phone fires `resize` constantly while you
+    // scroll, because the URL bar slides away and the viewport gets taller;
+    // re-placing on every one of those made the panel jitter under your thumb.
+    // Height changing on its own never moves the panel anyway.
+    var lastWidth = window.innerWidth;
+
     window.addEventListener('resize', function () {
+      if (window.innerWidth === lastWidth) return;
+      lastWidth = window.innerWidth;
       if (!modal.hidden && pending) placePanel();
     });
 

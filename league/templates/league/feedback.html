@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Site feedback{% endblock %}
+
+{% block content %}
+<h1>Site feedback</h1>
+<p class="subtle">
+  Anything you want added, changed or fixed on this site. Not for keeper
+  declarations &mdash; those still go to the commissioner by text.
+</p>
+
+<form method="post" class="feedback-form">
+  {% csrf_token %}
+
+  {% comment %}
+    Where you came from, carried through the POST rather than read again on the
+    other side: after the redirect the referer is this page, which would tell
+    the commissioner nothing.
+  {% endcomment %}
+  <input type="hidden" name="page" value="{{ from_page }}">
+
+  {% comment %}
+    Rendering the fields by hand rather than {{ form }}, so the radios and the
+    textarea get the page's own markup. {{ form.field.errors }} is where
+    validation failures land -- the view re-renders this same template with the
+    bound form when a POST does not validate.
+  {% endcomment %}
+  <fieldset class="feedback-kind">
+    <legend>{{ form.kind.label }}</legend>
+    {{ form.kind.errors }}
+    {{ form.kind }}
+  </fieldset>
+
+  <p class="field">
+    <label for="{{ form.message.id_for_label }}">{{ form.message.label }}</label>
+    {{ form.message.errors }}
+    {{ form.message }}
+  </p>
+
+  <button type="submit" class="board-btn">Send it</button>
+</form>
+
+{% if mine %}
+  <h2 class="feedback-mine-head">What you have sent</h2>
+  <ul class="feedback-list">
+    {% for note in mine %}
+      <li class="feedback-item{% if note.resolved %} done{% endif %}">
+        <p class="feedback-meta">
+          <span class="feedback-kind-tag">{{ note.get_kind_display }}</span>
+          <span class="subtle">{{ note.created|date:"j M Y" }}</span>
+          {% if note.resolved %}<span class="feedback-done-tag">&#10003; handled</span>{% endif %}
+        </p>
+        {% comment %}
+          linebreaks turns the newlines they typed into paragraphs, and escapes
+          the text on the way -- never mark_safe anything a user submitted.
+        {% endcomment %}
+        <div class="feedback-body">{{ note.message|linebreaks }}</div>
+      </li>
+    {% endfor %}
+  </ul>
+{% endif %}
+{% endblock %}

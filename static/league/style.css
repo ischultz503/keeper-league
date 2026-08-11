@@ -93,6 +93,141 @@ h1 { margin: 0 0 0.25rem; font-size: 1.6rem; }
 .error { color: #a12a2a; }
 code { background: #eef0f3; padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; }
 
+/* Flash messages (django.contrib.messages) --------------------------------- */
+
+/* Rendered in base.html, so any view can leave one behind on a redirect.
+   Classed by the message's own tags -- `success`, `error` -- which is what
+   Django puts there. */
+.messages {
+  list-style: none;
+  margin: 0 0 1.2rem;
+  padding: 0;
+}
+
+.messages li {
+  padding: 0.7rem 1rem;
+  border-radius: 6px;
+  border-left: 4px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.messages li.error {
+  border-left-color: #a12a2a;
+  background: #fbeeee;
+  color: #a12a2a;
+}
+
+
+/* Site feedback ------------------------------------------------------------ */
+
+.feedback-form {
+  max-width: 46rem;
+  margin: 1.4rem 0 2rem;
+  padding: 1.1rem 1.2rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.feedback-kind {
+  margin: 0 0 1rem;
+  padding: 0;
+  border: 0;
+}
+
+.feedback-kind legend,
+.feedback-form .field label {
+  padding: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+/* Django renders a RadioSelect as a <ul>. Laid out in a row on a wide screen,
+   and left to wrap to one-per-line on a phone, where each row is also a tap
+   target and wants the width. */
+.feedback-kind ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.2rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.feedback-kind label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+
+.feedback-form .field { margin: 0 0 1rem; }
+
+.feedback-form textarea {
+  display: block;
+  width: 100%;
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.95rem;
+  /* Vertical only: a textarea dragged wider than its container is the one
+     resize direction that breaks the layout. */
+  resize: vertical;
+}
+
+/* Django's field.errors renders as <ul class="errorlist">. */
+.feedback-form .errorlist {
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  color: #a12a2a;
+  font-size: 0.85rem;
+}
+
+.feedback-mine-head { margin-top: 2rem; font-size: 1.1rem; }
+
+.feedback-list {
+  max-width: 46rem;
+  margin: 0.8rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.feedback-item {
+  padding: 0.8rem 1rem;
+  margin-bottom: 0.7rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line);
+  border-radius: 6px;
+}
+
+/* Handled notes keep their place in the list but stop asking for attention. */
+.feedback-item.done { border-left-color: var(--accent); }
+
+.feedback-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.feedback-kind-tag { font-weight: 700; }
+
+.feedback-done-tag { color: var(--accent); font-weight: 700; }
+
+.feedback-body { font-size: 0.95rem; }
+.feedback-body p { margin: 0.4rem 0 0; }
+
+
 /* Tables ------------------------------------------------------------------ */
 
 table.data {
@@ -183,6 +318,12 @@ table.data tr:first-child td.rank { color: var(--accent); }
   margin: 1.25rem 0;
   font-size: 0.94rem;
 }
+
+/* The one line above the board. A .callout, but tighter: it sits between the
+   title and the grid, and the standard callout margin pushes the board a
+   screen-inch further down on a phone for one sentence. */
+.board-note { margin: 0.9rem 0 0; }
+
 
 /* Rendered markdown (the rules page) -------------------------------------- */
 
@@ -441,6 +582,11 @@ body.dragging-panel { user-select: none; }
 .pick-list {
   flex: 1 1 auto;
   overflow-y: auto;
+  /* A swipe that runs off the end of this list stops there instead of handing
+     the rest of the gesture to the page behind it. Without it a scroll started
+     over the list moved the list, then the board, then stopped -- one gesture,
+     two different things moving. */
+  overscroll-behavior: contain;
   margin: 0;
   padding: 0 0.5rem;
   list-style: none;
@@ -1181,6 +1327,47 @@ thead th.own-col { color: #7ac8a0; box-shadow: none; }
 
   /* "Swipe the board sideways" is a lie once it all fits. */
   body:has(.board-scroll.fit) .board-hint { display: none; }
+
+  /* The mock-draft pick panel, as a sheet ---------------------------------- */
+
+  /* On a wide screen the panel hangs off the cell being drafted, in absolute
+     page coordinates. On a phone that was actively hostile: the panel sat over
+     whatever you had scrolled to, and board.js re-placed it on every `resize`
+     -- which a phone fires continuously while you scroll, as the URL bar slides
+     in and out. The page could only come to rest where the panel wanted it.
+
+     Pinned to the bottom of the viewport instead, there is nothing to place and
+     nothing to fight: the board scrolls freely behind it, which is what the
+     panel being non-modal was always for. board.js clears the inline top/left
+     at this width (see isSheet) so this geometry is the only one in play. */
+  .pick-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+  }
+
+  /* The tail points at a cell the sheet is no longer attached to. */
+  .pick-panel::before { display: none; }
+
+  .modal {
+    /* Roughly half the screen: enough list to choose from, enough board above
+       it to choose WITH. vh rather than dvh so the box does not resize as the
+       URL bar comes and goes -- a sheet that changes height under your thumb
+       is the same complaint in a smaller form. */
+    max-height: 52vh;
+    border-radius: 12px 12px 0 0;
+    border-bottom: 0;
+    box-shadow: 0 -12px 34px rgba(16, 20, 25, 0.32);
+  }
+
+  /* Dragging is off at this width (board.js), so stop advertising it. */
+  .modal-head { cursor: default; }
+
+  /* Room to scroll the last rounds out from behind the sheet. Only while a
+     pick is open -- board.js puts this class on the body and takes it off. */
+  body.picking { padding-bottom: 56vh; }
 }
 
 

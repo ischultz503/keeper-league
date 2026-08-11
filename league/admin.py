@@ -6,6 +6,7 @@ from .keeper_engine import recompute_team_selections, validate_keeper_set
 from .models import (
     DraftPick,
     DraftSlot,
+    Feedback,
     KeeperSelection,
     PickTrade,
     Player,
@@ -214,3 +215,29 @@ class KeeperSelectionAdmin(admin.ModelAdmin):
             self.message_user(
                 request, f'{team.name}: keeper set is legal. Burns {burns}.', level=messages.SUCCESS
             )
+
+
+@admin.register(Feedback)
+class FeedbackAdmin(admin.ModelAdmin):
+    """The suggestion box, from the commissioner's side.
+
+    Read-mostly: the notes are other people's words, so nothing here invites
+    editing them. `resolved` is the one field this side owns, and list_editable
+    puts it on the list page so working through a batch is a column of ticks
+    and one Save.
+    """
+
+    list_display = ['created', 'user', 'kind', 'short_message', 'page', 'resolved']
+    list_editable = ['resolved']
+    list_filter = ['resolved', 'kind']
+    search_fields = ['message', 'user__username']
+    readonly_fields = ['user', 'kind', 'message', 'page', 'created']
+
+    @admin.display(description='Note')
+    def short_message(self, obj):
+        return obj.message[:80] + ('...' if len(obj.message) > 80 else '')
+
+    def has_add_permission(self, request):
+        # Feedback comes from the site's form, attributed to whoever sent it.
+        # Typing one here would create a note from nobody.
+        return False

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import markdown
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -14,6 +15,7 @@ from django.views.decorators.http import require_POST
 from . import draft_sim
 from . import keeper_engine as engine
 from . import names
+from .forms import FeedbackForm
 from .models import (
     DraftPick,
     DraftSlot,
@@ -969,3 +971,47 @@ def rules(request):
     html = markdown.markdown(source, extensions=['tables', 'sane_lists'])
 
     return render(request, 'league/rules.html', {'rules_html': mark_safe(html)})
+
+
+@login_required
+def feedback(request):
+    """The suggestion box: submit a note about the site, and see your own back.
+
+    One view for both GET and POST, which is the conventional Django form view:
+    a POST that validates saves and REDIRECTS (rather than rendering), so a
+    refresh afterwards cannot submit the note twice. That is the Post/Redirect/
+    Get pattern, and the redirect is what makes the browser's reload harmless.
+
+    An invalid POST falls through to the same render as GET, with `form` now
+    carrying the errors -- so the template needs no idea which one it is.
+    """
+    if request.method == 'POST':
+        form = FeedbackForm(request.POST)
+        if form.is_valid():
+            note = form.save(commit=False)
+            # commit=False gives us the unsaved instance so the fields the form
+            # deliberately does not expose can be set from the request itself.
+            note.user = request.user
+            note.page = (request.POST.get('page') or '')[:200]
+            note.save()
+            messages.success(
+                request, 'Thanks — your note is in. The commissioner sees these.'
+            )
+            return redirect('feedback')
+    else:
+        form = FeedbackForm()
+
+    return render(
+        request,
+        'league/feedback.html',
+        {
+            'form': form,
+            # Only ever your own. Other managers' suggestions are theirs, and a
+            # shared list would turn a suggestion box into a comment section.
+            'mine': request.user.feedback.all(),
+            # The page they were on when they clicked the tab, so the hidden
+            # field below has something to carry. HTTP_REFERER is unreliable in
+            # general; here it is a hint on a note, and wrong is survivable.
+            'from_page': request.META.get('HTTP_REFERER', ''),
+        },
+    )

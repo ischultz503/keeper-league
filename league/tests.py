@@ -31,6 +31,7 @@ from . import views
 from .models import (
     DraftPick,
     DraftSlot,
+    Feedback,
     KeeperPrediction,
     KeeperSelection,
     PickTrade,
@@ -1866,6 +1867,16 @@ class BoardViewTests(TestCase):
         owners = [s.team.owner_name for s in response.context['slots']]
         self.assertEqual(owners, OWNERS)
 
+    def test_the_board_says_the_order_is_real(self):
+        """A page of "possible" keepers and "projected" picks invites the
+        assumption that the order is provisional too. It is not."""
+        self.assertContains(
+            self.client.get(reverse('board')),
+            '<strong>This is the actual draft order for the upcoming '
+            f'{self.season.year} draft.</strong>',
+            html=True,
+        )
+
     def test_only_the_first_eight_rounds_show_by_default(self):
         """Keeper costs never exceed Round 8, so rounds 1-8 are the whole
         planning surface and fit a screen without scrolling."""
@@ -3530,3 +3541,73 @@ class EligibilityPageTests(TestCase):
 
         self.assertNotIn('id="print-rules"', html)
         self.assertIn('missing from the deployment', html)
+
+
+class FeedbackTests(TestCase):
+    """The site suggestion box."""
+
+    def setUp(self):
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.other = get_user_model().objects.create_user('marcus', password='test-pass-1234')
+
+    def post(self, **fields):
+        data = {'kind': Feedback.Kind.IDEA, 'message': 'Please add a trade tracker.'}
+        data.update(fields)
+        return self.client.post(reverse('feedback'), data)
+
+    def test_anonymous_user_is_redirected_to_login(self):
+        response = self.client.get(reverse('feedback'))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn(reverse('login'), response.url)
+
+    def test_a_note_is_saved_against_the_sender(self):
+        self.client.force_login(self.user)
+        self.post()
+
+        note = Feedback.objects.get()
+        self.assertEqual(note.user, self.user)
+        self.assertEqual(note.message, 'Please add a trade tracker.')
+        self.assertEqual(note.kind, Feedback.Kind.IDEA)
+        self.assertFalse(note.resolved)
+
+    def test_a_successful_post_redirects_back_to_the_form(self):
+        """Post/Redirect/Get: a refresh afterwards must not send it twice."""
+        self.client.force_login(self.user)
+        self.assertRedirects(self.post(), reverse('feedback'))
+
+    def test_the_page_they_came_from_is_recorded(self):
+        self.client.force_login(self.user)
+        self.post(page='/board/')
+
+        self.assertEqual(Feedback.objects.get().page, '/board/')
+
+    def test_an_empty_note_is_rejected_and_the_form_comes_back(self):
+        self.client.force_login(self.user)
+        response = self.post(message='   ')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Feedback.objects.exists())
+        self.assertTrue(response.context['form'].errors)
+
+    def test_you_see_your_own_notes_and_nobody_else_s(self):
+        Feedback.objects.create(user=self.user, message='Mine, this one.')
+        Feedback.objects.create(user=self.other, message='Not for your eyes.')
+
+        self.client.force_login(self.user)
+        response = self.client.get(reverse('feedback'))
+
+        self.assertContains(response, 'Mine, this one.')
+        self.assertNotContains(response, 'Not for your eyes.')
+
+    def test_a_note_cannot_be_submitted_as_someone_else(self):
+        """`user` is not a form field, so a forged POST body cannot set it."""
+        self.client.force_login(self.user)
+        self.post(user=self.other.pk, resolved=True)
+
+        note = Feedback.objects.get()
+        self.assertEqual(note.user, self.user)
+        self.assertFalse(note.resolved)
+
+    def test_the_nav_links_to_the_form(self):
+        self.client.force_login(self.user)
+        self.assertContains(self.client.get(reverse('feedback')), 'Site feedback')
