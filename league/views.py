@@ -36,6 +36,7 @@ from .models import (
     Season,
     Team,
 )
+from .seasons import keeper_season, latest_roster_season
 
 RULES_PATH = Path(settings.BASE_DIR) / 'docs' / 'keeper_rules_v3.md'
 
@@ -43,34 +44,6 @@ RULES_PATH = Path(settings.BASE_DIR) / 'docs' / 'keeper_rules_v3.md'
 # cell a keeper can burn. The later rounds only matter for trades and the full
 # draft, and are behind the "all rounds" toggle.
 DEFAULT_VISIBLE_ROUNDS = 8
-
-
-def latest_roster_season():
-    """The most recent season we have roster data for (2025 today).
-
-    Deliberately not "the newest Season row": 2026 exists as a Season because it
-    has a draft order and picks, but no rosters have been played yet.
-    """
-    return Season.objects.filter(roster_entries__isnull=False).distinct().first()
-
-
-def keeper_season():
-    """The season being drafted for.
-
-    Primarily "the newest season that has a draft order", since that is what
-    defines a draft. Falls back to the season after the latest roster so keeper
-    costs still resolve before the order has been entered.
-    """
-    with_draft_order = (
-        Season.objects.filter(draft_slots__isnull=False).distinct().first()
-    )
-    if with_draft_order is not None:
-        return with_draft_order
-
-    roster_season = latest_roster_season()
-    if roster_season is None:
-        return None
-    return Season.objects.filter(year=roster_season.year + 1).first()
 
 
 # Rules section 6, "Transition rule -- 2026 draft only": the 2026 order is

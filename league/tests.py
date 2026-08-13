@@ -34,6 +34,7 @@ from . import keeper_engine as engine
 from . import names
 from . import poll
 from . import rules_vote as ballot
+from . import seasons
 from . import views
 from .context_processors import nav_key
 from .forms import DraftPollAlternativeForm
@@ -959,6 +960,68 @@ class AdminKeeperEntryTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'must come from the 2025 roster')
+
+
+# --- Which season are we talking about? -------------------------------------
+
+
+class SeasonResolutionTests(TestCase):
+    """league/seasons.py -- the two questions every layer of the app asks.
+
+    They used to live in views.py, which meant the context processor and the
+    management commands had to import from views to ask them. Same answers,
+    reachable without importing upwards.
+    """
+
+    def test_the_latest_roster_season_ignores_seasons_with_no_rosters(self):
+        """2026 exists as a Season -- it has a draft order -- but nobody has
+        played it yet, so it is not the latest ROSTER season."""
+        rostered = Season.objects.create(year=2025)
+        Season.objects.create(year=2026)
+        teams = make_teams()
+        make_entry(rostered, teams['Isaac'], 'Somebody', 4)
+
+        self.assertEqual(seasons.latest_roster_season(), rostered)
+
+    def test_the_latest_roster_season_is_none_with_no_rosters_at_all(self):
+        Season.objects.create(year=2026)
+        self.assertIsNone(seasons.latest_roster_season())
+
+    def test_the_keeper_season_is_the_one_with_a_draft_order(self):
+        Season.objects.create(year=2025)
+        drafting = Season.objects.create(year=2026)
+        make_draft(drafting, make_teams(), rounds=1)
+
+        self.assertEqual(seasons.keeper_season(), drafting)
+
+    def test_the_keeper_season_falls_back_to_the_year_after_the_rosters(self):
+        """Before the draft order is entered, keeper costs still have to
+        resolve -- so the next season is assumed."""
+        rostered = Season.objects.create(year=2025)
+        next_year = Season.objects.create(year=2026)
+        teams = make_teams()
+        make_entry(rostered, teams['Isaac'], 'Somebody', 4)
+
+        self.assertEqual(seasons.keeper_season(), next_year)
+
+    def test_the_keeper_season_is_none_when_there_is_nothing_to_go_on(self):
+        self.assertIsNone(seasons.keeper_season())
+
+    def test_the_fallback_needs_the_next_season_to_exist(self):
+        """A roster year with no following Season row resolves to nothing
+        rather than inventing one."""
+        rostered = Season.objects.create(year=2025)
+        teams = make_teams()
+        make_entry(rostered, teams['Isaac'], 'Somebody', 4)
+
+        self.assertIsNone(seasons.keeper_season())
+
+    def test_views_still_exposes_the_same_functions(self):
+        """views.py re-exports them by importing them, so the move did not
+        break `from league.views import keeper_season` for anything that has
+        not been updated yet."""
+        self.assertIs(views.keeper_season, seasons.keeper_season)
+        self.assertIs(views.latest_roster_season, seasons.latest_roster_season)
 
 
 # --- Views ------------------------------------------------------------------

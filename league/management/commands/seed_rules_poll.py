@@ -24,7 +24,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from league.models import RulesPoll, RulesProposal, Season
-from league.views import keeper_season
+from league.seasons import keeper_season
 
 INTRO = (
     'Three changes to Section 4, the roster-composition rules. Vote on each one '
