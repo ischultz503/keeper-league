@@ -29,6 +29,19 @@
         &middot; cells show who each team <em>could</em> keep at that round's cost
       {% endif %}
     </p>
+    {% comment %}
+      The draft time, once the poll has closed on a choice. It is the single
+      most important fact in this header with the draft weeks out, and it is
+      also where the retired Draft Poll menu entry went: the answer links to the
+      question that produced it. The string is built by league.poll.announcement
+      so it carries its zone -- see views.board.
+    {% endcomment %}
+    {% if draft_time %}
+      <p class="draft-when">
+        <strong>Drafting {{ draft_time }}</strong>
+        &mdash; <a href="{% url 'draft_poll' %}">how we picked</a>
+      </p>
+    {% endif %}
   </div>
 
   <div class="board-controls" id="board-controls" data-simulate-url="{% url 'simulate' %}">

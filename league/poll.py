@@ -47,6 +47,31 @@ def format_slot(moment):
     return f'{local:%a %b} {local.day}, {hour}:{local.minute:02d} {meridiem} {zone_label(local)}'
 
 
+def announcement(poll):
+    """"Tue Sep 8, 5:00 PM PT (after the Cowboys game)", or None.
+
+    What the board header says once the poll has actually decided something.
+    Two conditions, both required:
+
+      * a chosen_option -- there is nothing to announce otherwise;
+      * closed -- a time the commissioner is still weighing is not an
+        announcement, and the board is not where anyone should learn of one.
+
+    Built with format_slot rather than a template's {{ option.starts_at }},
+    which would print UTC and tell the league the draft is at 1 a.m. Wednesday.
+
+    Takes the poll (or None) and reads only fields already in memory, so the
+    caller decides how many queries this costs -- select_related the chosen
+    option and it costs none.
+    """
+    if poll is None or poll.chosen_option is None or not poll.closed:
+        return None
+
+    option = poll.chosen_option
+    when = format_slot(option.starts_at)
+    return f'{when} ({option.label})' if option.label else when
+
+
 # --- Answers ----------------------------------------------------------------
 
 # A mark for each answer, so no cell in the grid is distinguishable by colour

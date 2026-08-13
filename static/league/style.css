@@ -432,6 +432,15 @@ main.wide { max-width: 1500px; }
   flex-wrap: wrap;
 }
 
+/* The settled draft time, under the board title. Sized up from .subtle beside
+   it on purpose: with the draft weeks out it is the most useful line here. */
+.draft-when {
+  margin: 0.35rem 0 0;
+  font-size: 0.95rem;
+}
+
+.draft-when strong { color: var(--accent); }
+
 .round-toggle {
   flex: 0 0 auto;
   align-self: center;

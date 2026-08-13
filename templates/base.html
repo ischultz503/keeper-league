@@ -48,7 +48,21 @@
             {# The year comes from league.context_processors.nav, not a literal. #}
             <a href="{% url 'league_overview' %}"{% if nav_current == 'standings' %} aria-current="page"{% endif %}>{% if nav_roster_season %}{{ nav_roster_season.year }} {% endif %}Standings</a>
             <a href="{% url 'eligibility' %}"{% if nav_current == 'eligibility' %} aria-current="page"{% endif %}>Eligibility</a>
-            <a href="{% url 'draft_poll' %}"{% if nav_current == 'draft_poll' %} aria-current="page"{% endif %}>Draft Poll</a>
+            {% comment %}
+              The only conditional entry. A poll is a question, and once the
+              draft time is settled the question does not need a permanent slot
+              -- the answer is announced in the board header, which links here.
+              The route stays live; only the entry retires, and it comes back on
+              its own when next season's poll opens. See
+              league.context_processors.draft_poll_is_open.
+
+              Rules Vote above is NOT conditional and must not become so: the
+              closed ballot is the standing record of a rule change, and the
+              league will want to re-read it long after the vote.
+            {% endcomment %}
+            {% if nav_draft_poll %}
+              <a href="{% url 'draft_poll' %}"{% if nav_current == 'draft_poll' %} aria-current="page"{% endif %}>Draft Poll</a>
+            {% endif %}
             <a href="{% url 'feedback' %}"{% if nav_current == 'feedback' %} aria-current="page"{% endif %}>Site feedback</a>
             {% if user.is_staff %}<a href="{% url 'admin:index' %}">Admin</a>{% endif %}
 

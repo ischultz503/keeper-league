@@ -10,7 +10,8 @@ Use them sparingly: this runs on every single page, so anything expensive here
 is expensive everywhere.
 """
 
-from .models import Season
+from .models import DraftPoll, Season
+from .seasons import keeper_season
 
 # Which menu entry a given URL name lights up. Several routes share one entry:
 # `My Team` is the same tab whether you arrived via /my-team/, the bare
@@ -38,6 +39,31 @@ def nav_key(url_name):
     return NAV_KEYS.get(url_name or '', '')
 
 
+def draft_poll_is_open(request):
+    """Should the menu draw a Draft Poll entry at all?
+
+    A poll is a question, and once the draft time is settled the question stops
+    earning a permanent slot in a menu of eight. The ANSWER still matters, so
+    the route stays live and the board header links to it from the thing it
+    decided -- but the standing entry goes.
+
+    Nothing has to be remembered to bring it back. DraftPoll is keyed to Season,
+    so opening next August's poll makes the entry reappear by itself.
+
+    Anonymous requests skip the query outright. The menu only renders for
+    authenticated users, and this processor runs on EVERY request -- including
+    the login page, where the answer would be thrown away.
+    """
+    if not request.user.is_authenticated:
+        return False
+
+    season = keeper_season()
+    if season is None:
+        return False
+
+    return DraftPoll.objects.filter(season=season, closed=False).exists()
+
+
 def nav(request):
     """What the navigation needs to label and orient itself.
 
@@ -45,9 +71,19 @@ def nav(request):
     would quietly become a lie next autumn. One indexed query on a ten-row
     table, on a ten-user site, is a fair price for a label that stays true.
 
+    `nav_draft_poll` is whether the Draft Poll entry is drawn -- see
+    draft_poll_is_open. Same bargain, one more query on authenticated pages
+    against a table with one row per season, bought so the menu cannot go stale.
+    Note that it costs TWO: keeper_season() is the other, and neither runs for
+    a logged-out visitor.
+
     `nav_current` is which entry to mark with aria-current. It matters more now
     than it did: the links live behind a menu, so "where am I" can no longer be
     answered by glancing at the header.
+
+    NAV_KEYS deliberately still lists 'draft_poll'. A retired page highlighting
+    an entry that is not on screen highlights nothing, which is the right
+    outcome and needs no special case.
 
     request.resolver_match is filled in by Django *after* URL resolution and
     before the view runs, so it is always there by render time -- except on a
@@ -59,5 +95,6 @@ def nav(request):
         'nav_roster_season': (
             Season.objects.filter(roster_entries__isnull=False).distinct().first()
         ),
+        'nav_draft_poll': draft_poll_is_open(request),
         'nav_current': nav_key(match.url_name if match else ''),
     }

@@ -441,6 +441,10 @@ def board(request):
         'rows': rows,
         'revealed': revealed,
         'own_team': own_team,
+        # The settled draft time, or None while it is still a question. One
+        # query, and the label is built in Python because format_slot names the
+        # zone and a template printing starts_at would print UTC.
+        'draft_time': poll_logic.announcement(_poll_for(season)),
         # Grid cells only. Every list with room to spare -- the sandbox, the
         # popover, the mock-draft chooser -- prints full names.
         'short_names': _grid_names(),
@@ -1027,13 +1031,14 @@ def feedback(request):
 # _own_team(); no view below ever accepts a team id from the client.
 
 
-def _current_poll():
-    """The poll for the season being drafted, or None.
+def _poll_for(season):
+    """The draft poll for a given season, or None. One query.
 
     OneToOneField(Season) means there can only ever be one, which is why this
-    can return a single object with no "which poll?" to answer.
+    can return a single object with no "which poll?" to answer. The chosen
+    option comes along so callers can render the announced time without a
+    second query -- see poll_logic.announcement.
     """
-    season = keeper_season()
     if season is None:
         return None
     return (
@@ -1042,6 +1047,11 @@ def _current_poll():
         .select_related('season', 'chosen_option')
         .first()
     )
+
+
+def _current_poll():
+    """The poll for the season being drafted, or None."""
+    return _poll_for(keeper_season())
 
 
 def _poll_stamp(poll):

@@ -23,8 +23,10 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import connection
 from django.db.utils import IntegrityError
 from django.test import SimpleTestCase, TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 
@@ -3657,9 +3659,11 @@ class NavMenuTests(TestCase):
         self.assertLess(header.index('Draft Board'), header.index('<details'))
 
     def test_everything_else_moved_inside_the_menu(self):
+        """Draft Poll is absent here because this fixture has no open poll --
+        it is the one conditional entry. See DraftPollNavTests."""
         panel = self.panel()
-        for label in ['Rules', 'My Team', 'Standings', 'Eligibility',
-                      'Draft Poll', 'Site feedback', 'Log out']:
+        for label in ['Rules', 'Rules Vote', 'My Team', 'Standings',
+                      'Eligibility', 'Site feedback', 'Log out']:
             with self.subTest(label=label):
                 self.assertIn(label, panel)
 
@@ -3978,6 +3982,40 @@ class PollFormattingTests(SimpleTestCase):
         self.assertEqual(poll.glyph(''), '')
 
 
+class PollAnnouncementTests(SimpleTestCase):
+    """poll.announcement -- the settled draft time, or nothing.
+
+    SimpleTestCase because it reads fields off objects and never queries;
+    SimpleNamespace stands in for the poll so this needs no fixture at all.
+    """
+
+    def poll_row(self, *, chosen=True, closed=True, label=''):
+        option = SimpleNamespace(starts_at=poll_time(9, 8, 17), label=label)
+        return SimpleNamespace(
+            chosen_option=option if chosen else None, closed=closed
+        )
+
+    def test_a_closed_poll_with_a_choice_announces_it(self):
+        self.assertEqual(
+            poll.announcement(self.poll_row()), 'Tue Sep 8, 5:00 PM PT'
+        )
+
+    def test_the_label_is_carried_in_parentheses(self):
+        self.assertEqual(
+            poll.announcement(self.poll_row(label='after the Cowboys game')),
+            'Tue Sep 8, 5:00 PM PT (after the Cowboys game)',
+        )
+
+    def test_an_open_poll_announces_nothing_even_with_a_choice(self):
+        self.assertIsNone(poll.announcement(self.poll_row(closed=False)))
+
+    def test_a_closed_poll_with_no_choice_announces_nothing(self):
+        self.assertIsNone(poll.announcement(self.poll_row(chosen=False)))
+
+    def test_no_poll_announces_nothing(self):
+        self.assertIsNone(poll.announcement(None))
+
+
 class PollTallyTests(SimpleTestCase):
     """Counting, and which column wins."""
 
@@ -4225,6 +4263,208 @@ class DraftPollPageTests(TestCase):
 
     def test_the_menu_links_to_the_poll(self):
         self.assertContains(self.get(), reverse('draft_poll'))
+
+
+class DraftPollNavTests(TestCase):
+    """The Draft Poll menu entry retires when its poll closes.
+
+    A poll is a question; once the draft time is settled the question stops
+    earning a permanent slot in a menu of eight. The page is NOT retired with
+    it -- the answer and the record of how it was picked stay reachable.
+    """
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        # keeper_season() finds the season being drafted by its draft order.
+        make_draft(self.season, self.teams, rounds=1)
+
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = self.teams['Isaac']
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+        self.client.force_login(self.user)
+
+    def open_poll(self):
+        return DraftPoll.objects.create(season=self.season)
+
+    def panel(self):
+        """The menu's contents on a page that is not the poll itself."""
+        html = self.client.get(reverse('rules')).content.decode()
+        header = html[html.index('<header'):html.index('</header>')]
+        return header[header.index('<div class="nav-panel">'):]
+
+    # -- the entry ----------------------------------------------------------
+
+    def test_the_entry_is_in_the_menu_while_the_poll_is_open(self):
+        self.open_poll()
+        self.assertIn('Draft Poll', self.panel())
+
+    def test_the_entry_leaves_the_menu_when_the_poll_closes(self):
+        poll_row = self.open_poll()
+        self.assertIn('Draft Poll', self.panel())
+
+        poll_row.closed = True
+        poll_row.save(update_fields=['closed'])
+
+        self.assertNotIn('Draft Poll', self.panel())
+
+    def test_the_entry_is_absent_when_no_poll_exists(self):
+        """Before the first poll of a season is created there is no question
+        to link to, so there is no entry either."""
+        self.assertNotIn('Draft Poll', self.panel())
+
+    def test_the_entry_returns_when_a_new_seasons_poll_opens(self):
+        """Nothing has to be remembered next August. DraftPoll is keyed to
+        Season, so a new poll brings the entry back by itself."""
+        closed = self.open_poll()
+        closed.closed = True
+        closed.save(update_fields=['closed'])
+        self.assertNotIn('Draft Poll', self.panel())
+
+        next_season = Season.objects.create(year=2027)
+        make_draft(next_season, self.teams, rounds=1)
+        DraftPoll.objects.create(season=next_season)
+
+        self.assertIn('Draft Poll', self.panel())
+
+    # -- what must NOT retire with it ---------------------------------------
+
+    def test_the_rules_vote_entry_stays_in_every_case(self):
+        """Asserted deliberately: the closed ballot is the standing record of a
+        rule change, so a later tidy-up must not retire it alongside the poll.
+        """
+        with self.subTest(case='no poll'):
+            self.assertIn('Rules Vote', self.panel())
+
+        poll_row = self.open_poll()
+        with self.subTest(case='poll open'):
+            self.assertIn('Rules Vote', self.panel())
+
+        poll_row.closed = True
+        poll_row.save(update_fields=['closed'])
+        with self.subTest(case='poll closed'):
+            self.assertIn('Rules Vote', self.panel())
+
+    def test_the_page_still_answers_when_the_entry_is_gone(self):
+        """Retiring the entry must not retire the route. The 2026 answers are
+        how the league picked a night, and the board header links here."""
+        poll_row = self.open_poll()
+        poll_row.closed = True
+        poll_row.save(update_fields=['closed'])
+
+        response = self.client.get(reverse('draft_poll'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_the_rest_of_the_menu_is_untouched(self):
+        poll_row = self.open_poll()
+        poll_row.closed = True
+        poll_row.save(update_fields=['closed'])
+
+        panel = self.panel()
+        for label in ['Rules', 'My Team', 'Standings', 'Eligibility',
+                      'Site feedback', 'Log out']:
+            with self.subTest(label=label):
+                self.assertIn(label, panel)
+
+    # -- cost ---------------------------------------------------------------
+
+    def poll_table_queried_by(self, url_name):
+        with CaptureQueriesContext(connection) as captured:
+            self.client.get(reverse(url_name))
+        sql = ' '.join(query['sql'] for query in captured.captured_queries)
+        return DraftPoll._meta.db_table in sql
+
+    def test_an_anonymous_request_asks_nothing_about_the_poll(self):
+        """The context processor runs on EVERY request, login page included,
+        and the menu it feeds only renders for authenticated users.
+
+        The second half keeps the first honest: without it, a typo in the
+        table name would make this pass whatever the code did."""
+        self.open_poll()
+        self.assertTrue(self.poll_table_queried_by('rules'))
+
+        self.client.logout()
+        self.assertFalse(self.poll_table_queried_by('login'))
+
+
+class BoardDraftTimeTests(TestCase):
+    """The settled draft time in the board header.
+
+    This is where the retired menu entry went: the answer is announced on the
+    page everyone is already on, and links back to the question.
+    """
+
+    def setUp(self):
+        self.season = Season.objects.create(year=2026)
+        self.teams = make_teams()
+        make_draft(self.season, self.teams, rounds=1)
+
+        self.user = get_user_model().objects.create_user('isaac', password='test-pass-1234')
+        self.isaac = self.teams['Isaac']
+        self.isaac.user = self.user
+        self.isaac.save(update_fields=['user'])
+        self.client.force_login(self.user)
+
+    def make_poll(self, *, chosen, closed, label=''):
+        poll_row = DraftPoll.objects.create(season=self.season, closed=closed)
+        if chosen:
+            option = DraftPollOption.objects.create(
+                poll=poll_row, starts_at=poll_time(9, 8, 17), label=label
+            )
+            poll_row.chosen_option = option
+            poll_row.save(update_fields=['chosen_option'])
+        return poll_row
+
+    def board(self):
+        return self.client.get(reverse('board'))
+
+    def test_a_closed_poll_with_a_choice_announces_the_time(self):
+        self.make_poll(chosen=True, closed=True)
+
+        response = self.board()
+        self.assertContains(response, 'Drafting Tue Sep 8, 5:00 PM PT')
+
+    def test_the_announced_time_names_its_zone(self):
+        """The bug this exists to catch: a bare {{ option.starts_at }} prints
+        UTC, which would tell the league the draft is at midnight Wednesday.
+        A test asserting only "Sep 8" would sail straight past it."""
+        self.make_poll(chosen=True, closed=True)
+
+        self.assertContains(self.board(), 'PT')
+        self.assertEqual(self.board().context['draft_time'], 'Tue Sep 8, 5:00 PM PT')
+
+    def test_an_options_label_comes_along(self):
+        self.make_poll(chosen=True, closed=True, label='after the Cowboys game')
+        self.assertContains(self.board(), '(after the Cowboys game)')
+
+    def test_the_announcement_links_back_to_the_poll(self):
+        """The retired menu entry's replacement -- and the only route to the
+        record of how the night was picked."""
+        self.make_poll(chosen=True, closed=True)
+
+        response = self.board()
+        self.assertContains(response, 'how we picked')
+        self.assertContains(response, reverse('draft_poll'))
+
+    # -- when nothing is announced ------------------------------------------
+
+    def test_a_chosen_but_open_poll_announces_nothing(self):
+        """A time the commissioner is still weighing is not an announcement,
+        and the board is not where anyone should find that out."""
+        self.make_poll(chosen=True, closed=False)
+
+        response = self.board()
+        self.assertIsNone(response.context['draft_time'])
+        self.assertNotContains(response, 'Drafting')
+
+    def test_a_closed_poll_with_no_choice_announces_nothing(self):
+        self.make_poll(chosen=False, closed=True)
+
+        self.assertIsNone(self.board().context['draft_time'])
+
+    def test_no_poll_at_all_announces_nothing(self):
+        self.assertIsNone(self.board().context['draft_time'])
 
 
 class DraftPollVoteApiTests(TestCase):
