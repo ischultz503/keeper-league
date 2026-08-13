@@ -45,9 +45,9 @@ The cost is based on **where the player was drafted, not who drafted him or who 
 
 ## 4. Roster Composition Rules for Keepers
 
-- Only **1 keeper** may have a **current-year keeper cost in Rounds 1–2**. (This is based on what the player costs *this year*, after escalation — a Round 3 draftee on his second keep costs Round 2 and counts against this limit.)
-- If keeping **3 players**, at least one keeper must have a current-year cost of **Round 8 or later**.
-  - Example of a legal trio: a Round 1 cost + a Round 3 cost + a Round 8 cost.
+**There are none beyond cost.** Any combination of up to three keepers is legal provided you can pay for it under Section 3 and each player is eligible under Section 5. You may keep two Rounds 1–2 keepers, or three Round-8-cost keepers, or any other mix — the pick you forfeit is the whole of the price.
+
+*(This section previously limited premium and late-round keepers. Both limits were removed by league vote on 8.13.2026 — see the changelog.)*
 
 ## 5. Keeper Eligibility
 
@@ -96,7 +96,7 @@ The consolation slot-choice rule above takes effect with the 2026 season's conso
 
 **Missing pick (Marcus / JSN).** JSN was drafted in Round 4. Marcus traded his Round 4 pick to Isaac last season. To keep JSN, Marcus forfeits his **next-earlier owned pick — his Round 3**. Isaac keeps the acquired Round 4 pick. (Teams are still free to trade picks around this before the declaration deadline.)
 
-**Composition limit (Isaac).** Ashton Jeanty (Round 2) and Brock Bowers (Round 2) both carry Round 2 costs. Only one keeper may cost Rounds 1–2, so Isaac can keep **only one** of them.
+**Two premium keepers (Isaac).** Ashton Jeanty (Round 2) and Brock Bowers (Round 2) both carry Round 2 costs. Since the composition limits were repealed, Isaac may keep **both** — and Section 3's same-cost-round rule sets the price: the first costs his **Round 2** pick, the second his **Round 1**. He does not pick until Round 3. Nothing forbids the set; it simply costs the top of his draft.
 
 **Same cost round (Isaac).** Rashee Rice (drafted Round 8) and Khalil Shakir (drafted Round 10 → Round 8 cost) both cost Round 8. Keeping both forfeits Isaac's **Round 8 and Round 7** picks.
 

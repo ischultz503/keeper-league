@@ -4,6 +4,42 @@ History of how the rules doc got to its current wording. Lifted out of
 `keeper_rules_v3.md` so the rules page shows the rules and nothing else;
 kept because section 8 asks that rule changes stay documented.
 
+## Fourth Draft (8.13.2026), superseding the Third Draft (8.9.2026)
+
+The first **rule change** in this document rather than a clarification, and the
+first carried by a vote under section 8. Three proposals were put to the league
+at `/rules-vote/`, all three on section 4 (roster composition). **All ten
+managers voted.**
+
+1. **Proposal 1 — PASSED.** The limit of one keeper with a current-year cost in
+   **Rounds 1–2** is **removed**. Any number of premium keepers is now legal;
+   the cost rules are the only deterrent, since two Round-2-cost keepers take
+   your Round 2 and — by the same-round collision rule — your Round 1 as well.
+   (Two Round-1-cost keepers remain impossible: section 3 refuses a keep when
+   you own no pick in the cost round or earlier. That is arithmetic, not a
+   composition limit.)
+2. **Proposal 2 — PASSED.** The requirement that a **3-keeper set include one
+   keeper costing Round 8 or later** is **removed**. An all-premium trio is now
+   legal if you can pay for it.
+3. **Proposal 3 — FAILED.** The proposed cap of **at most one keeper with a
+   Round-8-or-later cost** was rejected. Late-round stacking stays legal:
+   three Round-8-cost keepers still cost picks **8, 7 and 6** under the
+   collision rule, and the league has now looked straight at that and declined
+   to change it. If someone does stack three sleepers, the fallback already
+   drafted in `docs/league_votes.md` is Option C — steeper collision pricing
+   for the second late keeper — not the cap that was just voted down.
+
+**Combined effect: section 4 had exactly two rules and both were repealed, so
+there are now no roster-composition limits at all.** The section is kept (and
+says so) rather than deleted, because the numbering of sections 5–8 is
+referenced throughout the rules and the code. What still constrains a keeper
+set is only: at most three keepers (section 1), escalation and the 3-keep
+maximum (section 2), owning the picks to pay for it (section 3), and
+eligibility (section 5).
+
+The worked example "Composition limit (Isaac)" was replaced accordingly: Jeanty
+and Bowers are now both keepable, at the price of Isaac's Rounds 2 and 1.
+
 ## Third Draft (8.9.2026), superseding the Second Draft (8.20.2025)
 
 Clarifications that filled gaps the old doc did not address, not rule changes.
