@@ -1,7 +1,8 @@
 """Tests for the keeper engine and the site's views.
 
 Layout mirrors the rules doc: costs (section 2), forfeiture (section 3),
-composition (section 4), eligibility (section 5), draft order (section 6).
+composition (section 4 -- repealed 8.13.2026, so what is tested there now is
+that nothing is forbidden), eligibility (section 5), draft order (section 6).
 
 Pure arithmetic is tested with SimpleTestCase (no database at all). Anything
 that depends on pick inventory or keep history needs real rows, so it uses
@@ -651,8 +652,9 @@ class ValidationTests(TestCase):
         )
 
     def test_a_legal_trio_validates(self):
-        """Rules doc section 4: 'a Round 1 cost + a Round 3 cost + a Round 8
-        cost' is the stated example of a legal trio."""
+        """A Round 1 + Round 3 + Round 8 trio. It was the rules doc's example of
+        a legal trio back when section 4 had limits, and it stays legal now that
+        it has none -- the mix was never the question, only the price."""
         result = self.validate([
             self.entry('Elite Guy', 1),
             self.entry('Good Guy', 3),
@@ -665,29 +667,52 @@ class ValidationTests(TestCase):
         result = self.validate([self.entry(f'Guy {i}', 9) for i in range(4)])
         self.assertInvalid(result, 'limit is 3')
 
-    def test_two_premium_keepers_are_rejected(self):
-        """Rules doc worked example: Jeanty (R2) and Bowers (R2) -- only one
-        keeper may cost Rounds 1-2, so Isaac can keep only one."""
+    def test_two_premium_keepers_are_allowed(self):
+        """Rules doc worked example, inverted by the 8.13.2026 vote: Jeanty (R2)
+        and Bowers (R2) are BOTH keepable now. The old one-premium-keeper limit
+        is gone, and section 3's collision rule sets the price instead -- the
+        first takes Isaac's Round 2, the second walks to his Round 1."""
         result = self.validate([
             self.entry('Ashton Jeanty', 2),
             self.entry('Brock Bowers', 2),
         ])
-        self.assertInvalid(result, 'Rounds 1-2')
+        self.assertTrue(result.valid, result.errors)
+        self.assertEqual(sorted(a.pick.round for a in result.burned_picks), [1, 2])
 
-    def test_a_round_1_and_a_round_2_keeper_are_also_rejected(self):
+    def test_a_round_1_and_a_round_2_keeper_are_also_allowed(self):
+        """Two different premium cost rounds, so no collision -- each keeper
+        simply pays its own round."""
         result = self.validate([self.entry('R1 Guy', 1), self.entry('R2 Guy', 2)])
-        self.assertInvalid(result, 'Rounds 1-2')
+        self.assertTrue(result.valid, result.errors)
+        self.assertEqual(sorted(a.pick.round for a in result.burned_picks), [1, 2])
 
-    def test_three_keepers_need_one_costing_round_8_or_later(self):
+    def test_three_keepers_need_no_cheap_one(self):
+        """The 'a trio must include a Round 8 or later keeper' rule was repealed
+        on 8.13.2026. An all-premium trio is legal if the team can pay."""
         result = self.validate([
             self.entry('A', 2), self.entry('B', 5), self.entry('C', 6),
         ])
-        self.assertInvalid(result, 'Round 8 or later')
-
-    def test_two_expensive_keepers_are_fine_without_a_cheap_one(self):
-        """The Round-8 floor only applies to a full three-keeper set."""
-        result = self.validate([self.entry('A', 2), self.entry('B', 5)])
         self.assertTrue(result.valid, result.errors)
+        self.assertEqual(sorted(a.pick.round for a in result.burned_picks), [2, 5, 6])
+
+    def test_three_late_round_keepers_are_legal(self):
+        """Proposal 3 of the 2026 vote FAILED, so late stacking stays legal.
+        Three Round-8-cost keepers collide twice and cost picks 8, 7 and 6 --
+        the status quo the league looked at and chose to keep."""
+        result = self.validate([
+            self.entry('Sleeper A', 8),
+            self.entry('Sleeper B', 10),      # -> Round 8 cost
+            self.entry('Sleeper C', None),    # undrafted -> Round 8 cost
+        ])
+        self.assertTrue(result.valid, result.errors)
+        self.assertEqual(sorted(a.pick.round for a in result.burned_picks), [6, 7, 8])
+
+    def test_two_round_1_costs_remain_impossible(self):
+        """Not a composition limit -- arithmetic. The second Round 1 keeper
+        would need a pick earlier than Round 1, and section 3 refuses that. This
+        survived the repeal because it was never section 4's doing."""
+        result = self.validate([self.entry('R1 Guy', 1), self.entry('R1 Clone', 1)])
+        self.assertInvalid(result, 'No pick owned in Round 1')
 
     def test_pending_eligibility_blocks_a_keeper(self):
         entry = self.entry('Unreviewed Guy', 5)
@@ -714,15 +739,28 @@ class ValidationTests(TestCase):
 
     def test_validation_reports_every_problem_at_once(self):
         """The commissioner should see the whole list, not fix them one at a
-        time -- which is why the engine returns results instead of raising."""
+        time -- which is why the engine returns results instead of raising.
+        Two problems from two different sections: eligibility (5) and an
+        unpayable cost (3)."""
+        pick = DraftPick.objects.get(season=self.season, round=1, original_team=self.isaac)
+        pick.current_team = self.teams['Luke']
+        pick.save(update_fields=['current_team'])
+
         bad = self.entry('Bad Guy', 5, eligible=False)
-        result = self.validate([bad, self.entry('R1', 1), self.entry('R2', 2)])
+        result = self.validate([bad, self.entry('R1', 1)])
         self.assertFalse(result.valid)
         self.assertGreaterEqual(len(result.errors), 2)
+        self.assertInvalid(result, 'not keeper-eligible')
+        self.assertInvalid(result, 'No pick owned in Round 1')
 
 
-class EscalatedCompositionTests(TestCase):
-    """Section 4 is judged on CURRENT-year cost, after escalation."""
+class EscalatedCostSetTests(TestCase):
+    """A set is priced on CURRENT-year cost, after escalation.
+
+    This used to be section 4's rule ('composition limits are judged on
+    current-year cost'). The limits went in the 8.13.2026 vote, but the
+    principle still governs section 3: an escalated cost collides with a fresh
+    one at the same round exactly as two fresh ones would."""
 
     @classmethod
     def setUpTestData(cls):
@@ -731,10 +769,10 @@ class EscalatedCompositionTests(TestCase):
         make_draft(cls.years[2026], cls.teams)
         make_draft(cls.years[2027], cls.teams)
 
-    def test_an_escalated_round_3_counts_against_the_premium_limit(self):
-        """A Round 3 draftee on his second keep costs Round 2 and counts
-        against the one-keeper-in-Rounds-1-2 limit -- the exact case called
-        out in the rules doc."""
+    def test_an_escalated_round_3_collides_with_a_fresh_round_2(self):
+        """A Round 3 draftee on his second keep costs Round 2, so he collides
+        with a genuine Round 2 keeper: the set is legal and takes Rounds 2
+        and 1. Before the repeal this same pair was rejected outright."""
         isaac = self.teams['Isaac']
 
         # Drafted R3 in 2025, kept in 2026 -> costs R2 in 2027.
@@ -759,8 +797,8 @@ class EscalatedCompositionTests(TestCase):
         result = engine.validate_keeper_set(
             isaac, self.years[2027], [escalating_2026, plain_r2]
         )
-        self.assertFalse(result.valid)
-        self.assertTrue(any('Rounds 1-2' in e for e in result.errors), result.errors)
+        self.assertTrue(result.valid, result.errors)
+        self.assertEqual(sorted(a.pick.round for a in result.burned_picks), [1, 2])
 
 
 # --- Applying a set ---------------------------------------------------------
@@ -886,16 +924,25 @@ class AdminKeeperEntryTests(TestCase):
         )
         self.assertEqual(burned, [7, 8])
 
-    def test_an_illegal_second_premium_keeper_is_blocked(self):
+    def test_a_second_premium_keeper_is_accepted(self):
+        """Was blocked before the 8.13.2026 repeal. Now the admin takes it and
+        the collision rule prices it: Jeanty on the Round 2, Bowers on the
+        Round 1."""
         jeanty = make_entry(self.roster_season, self.isaac, 'Ashton Jeanty', 2)
         bowers = make_entry(self.roster_season, self.isaac, 'Brock Bowers', 2)
         self.post_keeper(jeanty)
 
         response = self.post_keeper(bowers)
 
-        self.assertEqual(response.status_code, 200)      # re-rendered = rejected
-        self.assertContains(response, 'Rounds 1-2')
-        self.assertFalse(KeeperSelection.objects.filter(roster_entry=bowers).exists())
+        self.assertEqual(response.status_code, 302)      # redirect = saved
+        self.assertTrue(KeeperSelection.objects.filter(roster_entry=bowers).exists())
+
+        burned = sorted(
+            DraftPick.objects
+            .filter(season=self.season, current_team=self.isaac, forfeited=True)
+            .values_list('round', flat=True)
+        )
+        self.assertEqual(burned, [1, 2])
 
     def test_an_ineligible_player_is_blocked(self):
         entry = make_entry(self.roster_season, self.isaac, 'Bench Guy', 5, eligible=False)
@@ -2333,17 +2380,30 @@ class KeeperPredictionTests(TestCase):
         self.assertEqual(rounds[7]['via'], engine.VIA_COLLISION)
 
     def test_an_illegal_predicted_set_warns_but_still_locks(self):
-        """You are allowed to predict that a rival does something illegal."""
+        """You are allowed to predict that a rival does something illegal.
+        Two Round-1-cost keepers is the case that survived the 8.13.2026 repeal
+        -- section 3 has no pick earlier than Round 1 to pay the second."""
+        first = make_entry(self.roster_season, self.marcus, 'R1 Clone', 1)
+        second = make_entry(self.roster_season, self.marcus, 'Another R1 Clone', 1)
+        self.lock(first)
+        self.lock(second)
+
+        response = self.client.get(reverse('board'))
+        self.assertEqual(KeeperPrediction.objects.count(), 2)
+        warnings = response.context['team_warnings'].get(self.marcus.pk)
+        self.assertTrue(warnings)
+        self.assertTrue(any('No pick owned in Round 1' in w for w in warnings))
+
+    def test_a_premium_pair_prediction_no_longer_warns(self):
+        """Predicting that Isaac keeps both Jeanty and Bowers is now a
+        prediction of something perfectly legal, so the column is not flagged."""
         jeanty = make_entry(self.roster_season, self.marcus, 'Ashton Clone', 2)
         bowers = make_entry(self.roster_season, self.marcus, 'Brock Clone', 2)
         self.lock(jeanty)
         self.lock(bowers)
 
         response = self.client.get(reverse('board'))
-        self.assertEqual(KeeperPrediction.objects.count(), 2)
-        warnings = response.context['team_warnings'].get(self.marcus.pk)
-        self.assertTrue(warnings)
-        self.assertTrue(any('Rounds 1-2' in w for w in warnings))
+        self.assertFalse(response.context['team_warnings'].get(self.marcus.pk))
 
     # -- privacy ------------------------------------------------------------
 
@@ -2537,12 +2597,25 @@ class KeeperPreviewApiTests(TestCase):
         self.assertEqual(self.preview([mine, theirs]).status_code, 403)
 
     def test_illegal_sets_return_errors_rather_than_failing(self):
+        """Two Round-1-cost keepers: the one premium pair that is still illegal,
+        and it is section 3 that refuses it, not the repealed section 4."""
+        first = make_entry(self.roster_season, self.isaac, 'R1 Guy', 1)
+        second = make_entry(self.roster_season, self.isaac, 'R1 Clone', 1)
+
+        data = self.preview([first, second]).json()
+        self.assertFalse(data['valid'])
+        self.assertTrue(any('No pick owned in Round 1' in e for e in data['errors']))
+
+    def test_two_premium_keepers_preview_as_legal(self):
+        """The repealed limit reaches no part of the UI: the board's live
+        preview accepts Jeanty + Bowers and prices them at Rounds 2 and 1."""
         jeanty = make_entry(self.roster_season, self.isaac, 'Ashton Jeanty', 2)
         bowers = make_entry(self.roster_season, self.isaac, 'Brock Bowers', 2)
 
         data = self.preview([jeanty, bowers]).json()
-        self.assertFalse(data['valid'])
-        self.assertTrue(any('Rounds 1-2' in e for e in data['errors']))
+        self.assertTrue(data['valid'], data['errors'])
+        self.assertEqual(sorted(b['round'] for b in data['burned']), [1, 2])
+        self.assertNotIn('Rounds 1-2', json.dumps(data))
 
     def test_a_user_without_a_team_is_refused(self):
         stranger = get_user_model().objects.create_user('commish', password='test-pass-1234')

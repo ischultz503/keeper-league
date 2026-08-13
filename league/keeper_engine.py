@@ -19,8 +19,9 @@ MAX_KEEPERS_PER_TEAM = 3        # section 1
 MAX_KEEPS_PER_PLAYER = 3        # section 2, "Maximum keeper length: 3 keeps"
 LATE_ROUND_COST_FLOOR = 8       # section 2, round 9+/undrafted -> Round 8
 EARLIEST_ROUND = 1              # section 2, cannot escalate past Round 1
-PREMIUM_ROUNDS = (1, 2)         # section 4, at most one keeper costing R1-R2
-CHEAP_COST_THRESHOLD = 8        # section 4, a 3-keeper set needs one R8-or-later
+# Section 4 has no constants: the league repealed both composition limits by
+# vote on 8.13.2026. LATE_ROUND_COST_FLOOR above is *not* one of them -- it is
+# also 8, but it is the section 2 cost floor for round-9+/undrafted players.
 
 
 # --- Cost -------------------------------------------------------------------
@@ -427,10 +428,10 @@ class ValidationResult:
 def validate_keeper_set(team, season, roster_entries, chosen_picks=None):
     """Sections 1, 3, 4 and 5. Is this whole set of keepers legal for this team?
 
-    Takes the *complete* proposed set, not one player at a time, because almost
-    every rule here is set-dependent: the composition limits compare keepers to
-    each other, and which pick a keeper burns depends on what the other keepers
-    already burned.
+    Takes the *complete* proposed set, not one player at a time, because the
+    rule that bites is set-dependent: which pick a keeper burns depends on what
+    the other keepers already burned, so a keeper that is payable alone can be
+    unpayable alongside two others.
     """
     entries = list(roster_entries)
     result = ValidationResult()
@@ -470,19 +471,11 @@ def validate_keeper_set(team, season, roster_entries, chosen_picks=None):
 
     payable_costs = [cost_round for _, cost_round in payable]
 
-    # Section 4 -- roster composition, judged on *current-year* cost.
-    premium = [c for c in payable_costs if c in PREMIUM_ROUNDS]
-    if len(premium) > 1:
-        result.add_error(
-            f'{len(premium)} keepers cost Rounds 1-2; only one is allowed.'
-        )
-
-    if len(entries) == MAX_KEEPERS_PER_TEAM and payable_costs:
-        if not any(c >= CHEAP_COST_THRESHOLD for c in payable_costs):
-            result.add_error(
-                f'A 3-keeper set needs at least one keeper costing '
-                f'Round {CHEAP_COST_THRESHOLD} or later.'
-            )
+    # Section 4 -- roster composition. Deliberately empty, not forgotten: the
+    # league voted on 8.13.2026 to repeal both limits (one premium keeper, and
+    # a Round-8-or-later keeper in every trio). Any mix of up to three keepers
+    # is legal now; the only thing that rejects a top-heavy set is section 3
+    # below, when the team runs out of picks to pay with.
 
     # Section 3 -- can the team actually pay?
     burn = resolve_burned_picks(team, season, payable_costs, chosen_picks)
