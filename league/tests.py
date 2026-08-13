@@ -4348,7 +4348,8 @@ class DraftPollNavTests(TestCase):
 
     def test_the_page_still_answers_when_the_entry_is_gone(self):
         """Retiring the entry must not retire the route. The 2026 answers are
-        how the league picked a night, and the board header links here."""
+        the record of how the league picked a night, and the page keeps serving
+        them at its URL even though nothing links to it any more."""
         poll_row = self.open_poll()
         poll_row.closed = True
         poll_row.save(update_fields=['closed'])
@@ -4392,7 +4393,8 @@ class BoardDraftTimeTests(TestCase):
     """The settled draft time in the board header.
 
     This is where the retired menu entry went: the answer is announced on the
-    page everyone is already on, and links back to the question.
+    page everyone is already on. The announcement is the whole of it -- no link
+    back to the poll, see test_the_announcement_is_a_statement_not_a_link.
     """
 
     def setUp(self):
@@ -4438,14 +4440,18 @@ class BoardDraftTimeTests(TestCase):
         self.make_poll(chosen=True, closed=True, label='after the Cowboys game')
         self.assertContains(self.board(), '(after the Cowboys game)')
 
-    def test_the_announcement_links_back_to_the_poll(self):
-        """The retired menu entry's replacement -- and the only route to the
-        record of how the night was picked."""
+    def test_the_announcement_is_a_statement_not_a_link(self):
+        """Deliberate: the board says WHEN, and stops. Once the night is
+        settled nobody needs to re-read the grid, so with the menu entry
+        retired too, a closed poll is linked from nowhere -- reachable by URL,
+        which is what keeps the record available without spending a place in
+        the interface on it."""
         self.make_poll(chosen=True, closed=True)
 
         response = self.board()
-        self.assertContains(response, 'how we picked')
-        self.assertContains(response, reverse('draft_poll'))
+        self.assertContains(response, 'Drafting Tue Sep 8, 5:00 PM PT')
+        self.assertNotContains(response, 'how we picked')
+        self.assertNotContains(response, reverse('draft_poll'))
 
     # -- when nothing is announced ------------------------------------------
 

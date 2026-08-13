@@ -43,9 +43,9 @@ def draft_poll_is_open(request):
     """Should the menu draw a Draft Poll entry at all?
 
     A poll is a question, and once the draft time is settled the question stops
-    earning a permanent slot in a menu of eight. The ANSWER still matters, so
-    the route stays live and the board header links to it from the thing it
-    decided -- but the standing entry goes.
+    earning a permanent slot in a menu of eight. The board header announces the
+    ANSWER instead, and the route stays live at its URL -- but the standing
+    entry goes, and nothing links to it while the poll is closed.
 
     Nothing has to be remembered to bring it back. DraftPoll is keyed to Season,
     so opening next August's poll makes the entry reappear by itself.

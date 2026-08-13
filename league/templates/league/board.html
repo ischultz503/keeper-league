@@ -31,16 +31,17 @@
     </p>
     {% comment %}
       The draft time, once the poll has closed on a choice. It is the single
-      most important fact in this header with the draft weeks out, and it is
-      also where the retired Draft Poll menu entry went: the answer links to the
-      question that produced it. The string is built by league.poll.announcement
-      so it carries its zone -- see views.board.
+      most important fact in this header with the draft weeks out. The string is
+      built by league.poll.announcement so it carries its zone -- see
+      views.board.
+
+      Deliberately just the announcement, with no link back to the poll: the
+      answer is what people need here, and the grid of who-could-make-which-
+      night is not something anyone has to re-read once it is settled.
+      /draft-poll/ stays live and reachable by URL.
     {% endcomment %}
     {% if draft_time %}
-      <p class="draft-when">
-        <strong>Drafting {{ draft_time }}</strong>
-        &mdash; <a href="{% url 'draft_poll' %}">how we picked</a>
-      </p>
+      <p class="draft-when"><strong>Drafting {{ draft_time }}</strong></p>
     {% endif %}
   </div>
 
