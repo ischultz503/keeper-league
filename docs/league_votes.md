@@ -2,9 +2,9 @@
 
 Running list of rule questions to put to the league. Per the governance rule, changes pass by majority vote and take effect between seasons. The site implements the current written rules until a vote changes them.
 
-**Three of these are on the ballot now.** They are live at `/rules-vote/` on the site, seeded by `python manage.py seed_rules_poll`. The site records the votes and shows the counts; it does not decide who won — Section 8 says "majority vote" without saying majority of what, so the commissioner records each outcome by hand. A passed change is then applied by editing `docs/keeper_rules_v3.md` and adding an entry to `docs/keeper_rules_changelog.md`. The app never rewrites the rules doc.
+**The 2026 vote is closed.** All three items below went to the league at `/rules-vote/` (seeded by `python manage.py seed_rules_poll`), all ten managers voted, and the results are recorded on each item. The site records votes and shows the counts; it does not decide who won — Section 8 says "majority vote" without saying majority of what, so the commissioner recorded each outcome by hand. The two passed changes were applied by editing `docs/keeper_rules_v3.md` and adding a Fourth Draft entry to `docs/keeper_rules_changelog.md`. The app never rewrites the rules doc.
 
-Items are numbered by ballot position while a vote is running.
+Answered items stay here rather than being deleted: a rejected proposal is part of the record, and the next person to raise the same idea deserves to know it was already asked. Items are numbered by ballot position while a vote is running.
 
 ---
 
@@ -22,7 +22,7 @@ Items are numbered by ballot position while a vote is running.
 
 **Worth knowing:** two Round-1-cost keepers stay impossible whatever happens. The second would need a pick earlier than Round 1, and Section 3 refuses a keep when you own no pick in the cost round or any earlier round.
 
-**Status:** ON THE BALLOT — Proposal 1 of the 2026 vote (Option B).
+**Status: PUT TO THE LEAGUE AND PASSED (8.13.2026).** Proposal 1 of the 2026 vote, Option B, carried with all ten managers voting. The Rounds 1–2 bullet is deleted from Section 4. Keeping both Jeanty and Bowers is now legal, at the price of the commissioner's Round 2 *and* his Round 1 — the disclosure above stood on the ballot and the league voted for it anyway.
 
 ---
 
@@ -40,7 +40,7 @@ Items are numbered by ballot position while a vote is running.
 
 **Worth knowing:** this and Proposal 3 are not opposites. If Proposal 2 fails and Proposal 3 passes, a 3-keeper set must contain **exactly one** Round-8-or-later keeper — at least one from the rule that stayed, at most one from the rule that arrived. Coherent, possibly even good, but it should be voted for on purpose rather than arrived at by accident.
 
-**Status:** ON THE BALLOT — Proposal 2 of the 2026 vote (Option B).
+**Status: PUT TO THE LEAGUE AND PASSED (8.13.2026).** Proposal 2 of the 2026 vote, Option B, carried with all ten managers voting. The Round 8+ bullet is deleted from Section 4. With Proposal 1 also passing, Section 4 lost both of its rules and now constrains nothing — the "Worth knowing" note above about Proposal 2 and Proposal 3 combining is moot, since Proposal 3 failed.
 
 ---
 
@@ -58,7 +58,9 @@ Items are numbered by ballot position while a vote is running.
 
 **Definition, so this doesn't become an argument in 2027:** "current-year cost" means **after escalation**, the same convention Section 4 already uses. A waiver pickup on his second keep costs Round 7, so he no longer counts against this cap. That is intentional — he isn't cheap any more.
 
-**Status:** ON THE BALLOT — Proposal 3 of the 2026 vote (**Option B only**). Option C is deliberately not on the ballot and stays written down here as the fallback if Proposal 3 fails; the ballot's own text points managers at it and asks them to say so in the note box if they prefer it.
+**Status: PUT TO THE LEAGUE AND REJECTED (8.13.2026).** Proposal 3 of the 2026 vote put **Option B only** on the ballot, and it failed with all ten managers voting. Option A stands: three Round-8-cost keepers for picks 8, 7 and 6 is legal, the league looked straight at it, and it chose not to change it.
+
+**Option C stays on the table.** It was deliberately kept off the ballot as the fallback if B failed, and B failed, so it is now the obvious next proposal — the one to raise if somebody actually does stack three sleepers this year and the league changes its mind. Nothing about the 2026 vote rules it out; B losing says the league did not want a hard cap, not that it never wanted a price. Note that the passage of Proposals 1 and 2 also removed the "combined with the existing rules" reasoning under Option B above: there are no existing composition rules left for a cap to combine with, so a future Option B would be the only such rule rather than the third of three.
 
 ---
 
